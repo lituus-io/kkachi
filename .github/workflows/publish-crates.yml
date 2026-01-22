@@ -1,0 +1,108 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: Verify version matches tag
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+
+      - name: Run tests before publish
+        run: cargo test -p kkachi --features storage-bundled
+
+      - name: Publish kkachi (core library)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p kkachi --features storage-bundled --allow-dirty
+
+      - name: Wait for crates.io index update
+        run: sleep 30
+
+      - name: Publish kkachi-cache
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p kkachi-cache --allow-dirty
+        continue-on-error: true
+
+      - name: Publish kkachi-client
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p kkachi-client --allow-dirty
+        continue-on-error: true
+
+      - name: Publish kkachi-eval
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p kkachi-eval --allow-dirty
+        continue-on-error: true
+
+      - name: Publish kkachi-refine
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p kkachi-refine --allow-dirty
+        continue-on-error: true
+
+  create-release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            Add to your `Cargo.toml`:
+            ```toml
+            [dependencies]
+            kkachi = "${{ github.ref_name }}"
+            ```
+
+            For bundled DuckDB (no system dependencies):
+            ```toml
+            [dependencies]
+            kkachi = { version = "${{ github.ref_name }}", features = ["storage-bundled"] }
+            ```
+
+            ## Changelog
+            See the [full changelog](https://github.com/lituus-io/kkachi/compare/...v${{ github.ref_name }}) for details.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

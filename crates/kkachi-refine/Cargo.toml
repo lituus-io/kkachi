@@ -1,0 +1,16 @@
+[package]
+name = "kkachi-refine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Build-time optimization for the Kkachi LLM optimization library"
+
+[dependencies]
+kkachi = { path = "../kkachi" }
+kkachi-eval = { path = "../kkachi-eval" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }

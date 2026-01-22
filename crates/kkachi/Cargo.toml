@@ -1,0 +1,68 @@
+[package]
+name = "kkachi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description.workspace = true
+readme = "../../README.md"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+futures = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+string-interner = { workspace = true }
+dashmap = { workspace = true }
+bytes = { workspace = true }
+smallvec = { workspace = true }
+bumpalo = { workspace = true }
+crossbeam = { workspace = true }
+regex = { workspace = true }
+blake3 = { workspace = true }
+hex = { workspace = true }
+similar = { workspace = true }
+minijinja = { workspace = true }
+
+# Native-only dependencies (not WASM-compatible)
+tokio = { workspace = true, optional = true }
+tokio-wasm = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true }
+memmap2 = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
+console = { workspace = true, optional = true }
+duckdb = { workspace = true, optional = true }
+duckdb-bundled = { workspace = true, optional = true }
+
+# Tokenization (optional)
+tiktoken-rs = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+text-splitter = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+
+[features]
+default = ["std", "native"]
+std = []
+# Native platform support (includes tokio with full features, rayon, etc.)
+native = ["tokio", "tokio-stream", "memmap2", "rayon", "console"]
+# WASM support (minimal async runtime, no networking/threading)
+wasm = ["tokio-wasm"]
+# Use system DuckDB (requires: brew install duckdb on macOS)
+storage = ["duckdb", "native"]
+# Use bundled DuckDB (compiles from source, no system deps - for Linux/Windows CI)
+storage-bundled = ["duckdb-bundled", "native"]
+tiktoken = ["tiktoken-rs", "text-splitter"]
+huggingface = ["tokenizers", "text-splitter"]
+chunking = ["text-splitter"]

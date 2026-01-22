@@ -1,0 +1,35 @@
+[package]
+name = "kkachi-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line interface for the Kkachi LLM optimization library"
+
+[[bin]]
+name = "kkachi"
+path = "src/main.rs"
+
+[dependencies]
+kkachi = { path = "../kkachi" }
+kkachi-client = { path = "../kkachi-client" }
+kkachi-eval = { path = "../kkachi-eval" }
+kkachi-cache = { path = "../kkachi-cache" }
+clap = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+reedline = { workspace = true }
+nu-ansi-term = { workspace = true }
+directories = { workspace = true }
+console = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+default = []
+yaml = []
