@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use kkachi::diff::{DiffRenderer, DiffStyle, TextDiff};
-use kkachi::hitl::{HITLConfig, ReviewDecision};
+use kkachi::hitl::HITLConfig;
 use kkachi::recursive::{
     ChecklistCritic, Critic, CriticResult, HashEmbedder, InMemoryVectorStore,
     RecursiveState,

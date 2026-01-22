@@ -11,7 +11,7 @@ pip install kkachi
 ## Quick Start
 
 ```python
-from kkachi import Kkachi, ToolType, SimilarityWeights
+from kkachi import Kkachi, Cli, CliPipeline
 
 # Define a generation function
 def generate(iteration: int, feedback: str | None) -> str:
@@ -20,10 +20,16 @@ def generate(iteration: int, feedback: str | None) -> str:
         return f"Improved code based on: {feedback}"
     return "def parse_url(url: str) -> dict: ..."
 
-# Simple usage
+# Compose your own validator
+validator = CliPipeline() \
+    .stage("syntax", Cli("python").args(["-m", "py_compile"]).required()) \
+    .stage("lint", Cli("ruff").args(["check"])) \
+    .file_ext("py")
+
+# Run refinement with your validator
 result = Kkachi.refine("question -> code") \
-    .domain("rust") \
-    .critic_rust() \
+    .domain("python") \
+    .validate(validator) \
     .max_iterations(5) \
     .run("Write a URL parser", generate)
 
@@ -39,12 +45,18 @@ print(f"Answer: {result.answer}")
 The `Kkachi.refine()` builder provides a fluent interface for configuring refinement pipelines:
 
 ```python
+# Compose a Terraform validator
+terraform_validator = CliPipeline() \
+    .stage("fmt", Cli("terraform").args(["fmt", "-check"]).weight(0.2)) \
+    .stage("validate", Cli("terraform").args(["validate"]).required()) \
+    .file_ext("tf")
+
 result = Kkachi.refine("requirement -> terraform_code") \
     .domain("terraform") \
     .storage("~/.kkachi/context.db") \
     .max_iterations(10) \
     .until_score(0.95) \
-    .critic_terraform() \
+    .validate(terraform_validator) \
     .semantic_cache(True) \
     .similarity_threshold(0.90) \
     .auto_condense(True) \
@@ -52,20 +64,38 @@ result = Kkachi.refine("requirement -> terraform_code") \
     .run("Create S3 bucket with encryption", generate)
 ```
 
-### Built-in Critics
+### Generic CLI Validators
 
-- `critic_rust()` - Rust (cargo check, test, clippy)
-- `critic_python()` - Python (py_compile, pytest, ruff)
-- `critic_terraform()` - Terraform (fmt, validate, plan)
-- `critic_pulumi()` - Pulumi (preview, policy validate)
-- `critic_kubernetes()` - Kubernetes (kubectl dry-run)
-- `critic_heuristic(min_length, max_length)` - Simple heuristic checks
+Compose your own validators using `Cli` and `CliPipeline`:
+
+```python
+# Rust validator
+rust_validator = CliPipeline() \
+    .stage("format", Cli("rustfmt").args(["--check"]).weight(0.1)) \
+    .stage("compile", Cli("rustc").args(["--emit=metadata"]).required()) \
+    .stage("lint", Cli("cargo").args(["clippy"]).weight(0.3)) \
+    .file_ext("rs")
+
+# Python validator
+python_validator = CliPipeline() \
+    .stage("syntax", Cli("python").args(["-m", "py_compile"]).required()) \
+    .stage("lint", Cli("ruff").args(["check"])) \
+    .stage("types", Cli("mypy").args(["--ignore-missing-imports"])) \
+    .file_ext("py")
+
+# Kubernetes YAML validator
+k8s_validator = CliPipeline() \
+    .stage("lint", Cli("kubeval").args(["--strict"]).required()) \
+    .file_ext("yaml")
+```
 
 ### Similarity Weights
 
 Configure multi-signal similarity scoring:
 
 ```python
+from kkachi import SimilarityWeights
+
 weights = SimilarityWeights(
     embedding=0.50,   # Semantic similarity
     keyword=0.25,     # TF-IDF keyword matching
@@ -106,7 +136,7 @@ maturin build --release  # Release wheel
 
 ## License
 
-MIT License
+PolyForm Noncommercial 1.0.0
 
 Copyright (c) 2025 lituus-io
 Author: terekete <spicyzhug@gmail.com>

@@ -183,8 +183,7 @@ The declarative API provides:
     .forbid(pattern)        - Forbid substring
     .checklist()            - Start checklist critic
     .check(name, fn, w, fb) - Add checklist item
-    .critic_rust()          - Use Rust compiler
-    .critic_python()        - Use Python linter
+    .validate(pipeline)     - Use custom CLI pipeline
     .critic(custom)         - Custom critic
 
   Few-Shot:

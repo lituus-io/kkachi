@@ -36,9 +36,8 @@ mod pipeline {
         TrainingExample,
         VectorStore,
     };
-    // New declarative API
-    use kkachi::kkachi;
-    use kkachi::str_view::StrView;
+    // Declarative API
+    use kkachi::recursive::{FewShotConfig, Kkachi};
 
     /// Simulated LLM response generator.
     /// In production, this would call an actual LLM API.
@@ -349,7 +348,7 @@ fn parse_toml(s: &str) -> Result<toml::Value, toml::de::Error> {
             })
             .auto_condense(true)
             .semantic_cache(true)
-            // Use always-pass critic for demo (in production: .critic_rust())
+            // Use always-pass critic for demo (in production: use .validate(pipeline))
             .critic_always_pass()
             .run(question, |iteration, feedback| {
                 // Include RAG context in the generation

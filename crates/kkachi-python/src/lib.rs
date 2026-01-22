@@ -10,12 +10,18 @@
 //! ## Usage
 //!
 //! ```python
-//! from kkachi import Kkachi, ToolType, SimilarityWeights
+//! from kkachi import Kkachi, Cli, CliPipeline
 //!
-//! # Simple usage
+//! # Compose your own validator
+//! validator = CliPipeline() \
+//!     .stage("syntax", Cli("python").args(["-m", "py_compile"]).required()) \
+//!     .stage("lint", Cli("ruff").args(["check"])) \
+//!     .file_ext("py")
+//!
+//! # Run refinement
 //! result = Kkachi.refine("question -> code") \
-//!     .domain("rust") \
-//!     .critic(ToolType.Rust) \
+//!     .domain("python") \
+//!     .validate(validator) \
 //!     .max_iterations(5) \
 //!     .run("Write a URL parser", generate_fn)
 //!

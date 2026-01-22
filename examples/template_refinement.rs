@@ -9,8 +9,7 @@
 //!
 //! Run with: `cargo run --example template_refinement`
 
-use kkachi::recursive::{Template, FormatType, TemplateExample, TemplateCritic, HeuristicCritic};
-use kkachi::kkachi;
+use kkachi::recursive::{Template, FormatType, TemplateExample, TemplateCritic, HeuristicCritic, Kkachi};
 use kkachi::error::Result;
 
 fn main() -> Result<()> {

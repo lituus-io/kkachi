@@ -6,8 +6,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Note: basic_usage, continuous_learning, automated_optimization_pipeline, and
-# production_pipeline examples use an older API and need to be updated.
+# Note: Some examples use an older API and need to be updated.
 # They are commented out until the API is stabilized or they are rewritten.
 
 # [[example]]
@@ -26,6 +25,14 @@ publish = false
 # name = "production_pipeline"
 # path = "production_pipeline.rs"
 
+# [[example]]
+# name = "cli_driven_pipeline"
+# path = "cli_driven_pipeline.rs"
+
+# [[example]]
+# name = "declarative_api"
+# path = "declarative_api.rs"
+
 [[example]]
 name = "complete_dspy_pipeline"
 path = "complete_dspy_pipeline.rs"
@@ -33,14 +40,6 @@ path = "complete_dspy_pipeline.rs"
 [[example]]
 name = "repl_hitl_demo"
 path = "repl_hitl_demo.rs"
-
-[[example]]
-name = "cli_driven_pipeline"
-path = "cli_driven_pipeline.rs"
-
-[[example]]
-name = "declarative_api"
-path = "declarative_api.rs"
 
 [[example]]
 name = "template_refinement"
