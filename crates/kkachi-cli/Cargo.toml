@@ -13,9 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 kkachi = { path = "../kkachi" }
-kkachi-client = { path = "../kkachi-client" }
-kkachi-eval = { path = "../kkachi-eval" }
-kkachi-cache = { path = "../kkachi-cache" }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

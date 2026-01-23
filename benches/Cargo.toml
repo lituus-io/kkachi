@@ -6,7 +6,6 @@ publish = false
 
 [dependencies]
 kkachi = { path = "../crates/kkachi" }
-kkachi-eval = { path = "../crates/kkachi-eval" }
 criterion = { workspace = true }
 
 [[bench]]

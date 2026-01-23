@@ -1,10 +1,6 @@
 [workspace]
 members = [
     "crates/kkachi",
-    "crates/kkachi-client",
-    "crates/kkachi-eval",
-    "crates/kkachi-cache",
-    "crates/kkachi-refine",
     "crates/kkachi-cli",
     "crates/kkachi-wasm",
     "crates/kkachi-python",
