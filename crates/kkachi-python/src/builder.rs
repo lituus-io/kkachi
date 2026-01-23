@@ -2,15 +2,14 @@
 // All Rights Reserved.
 // Licensed under PolyForm Noncommercial 1.0.0
 
-//! Python bindings for the declarative Pipeline API.
+//! Python bindings for the declarative Refine API.
 
 use pyo3::prelude::*;
 
-use kkachi::recursive::{CliPipeline, Kkachi, SimilarityWeights};
+use kkachi::recursive::{checks, refine, Cli, IterativeMockLlm};
 
-use crate::similarity::PySimilarityWeights;
-use crate::types::PyRefinementResult;
-use crate::validator::PyCliPipeline;
+use crate::types::PyRefineResult;
+use crate::validator::PyCliValidator;
 
 /// Main entry point for Kkachi.
 #[pyclass(name = "Kkachi")]
@@ -21,13 +20,13 @@ impl PyKkachi {
     /// Start building a recursive refinement pipeline.
     ///
     /// Args:
-    ///     signature: The signature string (e.g., "question -> code")
+    ///     prompt: The prompt/question to refine.
     ///
     /// Returns:
     ///     RefineBuilder: A builder for configuring the refinement pipeline.
     #[staticmethod]
-    fn refine(signature: String) -> PyRefineBuilder {
-        PyRefineBuilder::new(signature)
+    fn refine(prompt: String) -> PyRefineBuilder {
+        PyRefineBuilder::new(prompt)
     }
 }
 
@@ -35,296 +34,179 @@ impl PyKkachi {
 #[pyclass(name = "RefineBuilder")]
 #[derive(Clone)]
 pub struct PyRefineBuilder {
-    signature: String,
-    domain: Option<String>,
-    storage_path: Option<String>,
+    prompt: String,
     max_iterations: u32,
     score_threshold: f64,
-    plateau_threshold: Option<f64>,
-    plateau_window: Option<usize>,
-    cli_pipeline: Option<CliPipeline>,
+    cli_validator: Option<Cli>,
     min_length: Option<usize>,
     max_length: Option<usize>,
-    use_semantic_cache: bool,
-    similarity_threshold: f32,
-    auto_condense: bool,
-    cluster_threshold: f32,
-    min_cluster_size: usize,
-    similarity_weights: Option<SimilarityWeights>,
-    few_shot_k: Option<usize>,
-    few_shot_as_demos: bool,
-    few_shot_refresh: bool,
-    use_cot: bool,
-    best_of_n: Option<u8>,
+    require_patterns: Vec<String>,
+    forbid_patterns: Vec<String>,
 }
 
 #[pymethods]
 impl PyRefineBuilder {
     #[new]
-    fn new(signature: String) -> Self {
+    fn new(prompt: String) -> Self {
         Self {
-            signature,
-            domain: None,
-            storage_path: None,
+            prompt,
             max_iterations: 10,
             score_threshold: 0.9,
-            plateau_threshold: None,
-            plateau_window: None,
-            cli_pipeline: None,
-            min_length: Some(10),
+            cli_validator: None,
+            min_length: None,
             max_length: None,
-            use_semantic_cache: true,
-            similarity_threshold: 0.95,
-            auto_condense: true,
-            cluster_threshold: 0.80,
-            min_cluster_size: 3,
-            similarity_weights: None,
-            few_shot_k: None,
-            few_shot_as_demos: true,
-            few_shot_refresh: false,
-            use_cot: false,
-            best_of_n: None,
+            require_patterns: Vec::new(),
+            forbid_patterns: Vec::new(),
         }
     }
 
-    // ===== Domain & Storage =====
-
-    /// Set the domain namespace for storage/retrieval.
-    fn domain(&self, domain: String) -> Self {
-        let mut new = self.clone();
-        new.domain = Some(domain);
-        new
-    }
-
-    /// Set the storage path.
-    fn storage(&self, path: String) -> Self {
-        let mut new = self.clone();
-        new.storage_path = Some(path);
-        new
-    }
-
-    // ===== Convergence Criteria =====
-
     /// Set maximum iterations.
-    fn max_iterations(&self, n: u32) -> Self {
+    fn max_iter(&self, n: u32) -> Self {
         let mut new = self.clone();
         new.max_iterations = n;
         new
     }
 
     /// Set score threshold for convergence.
-    fn until_score(&self, threshold: f64) -> Self {
+    fn target(&self, threshold: f64) -> Self {
         let mut new = self.clone();
         new.score_threshold = threshold;
         new
     }
 
-    /// Set plateau detection for convergence.
-    fn until_plateau(&self, min_improvement: f64, window: usize) -> Self {
+    /// Use a CLI validator.
+    fn validate(&self, validator: PyCliValidator) -> Self {
         let mut new = self.clone();
-        new.plateau_threshold = Some(min_improvement);
-        new.plateau_window = Some(window);
+        new.cli_validator = Some(validator.into_inner());
         new
     }
 
-    // ===== Validation =====
-
-    /// Use a custom CLI pipeline for validation.
-    ///
-    /// Example:
-    /// ```python
-    /// validator = CliPipeline() \
-    ///     .stage("format", Cli("rustfmt").args(["--check"]).weight(0.1)) \
-    ///     .stage("compile", Cli("rustc").args(["--emit=metadata"]).required()) \
-    ///     .file_ext("rs")
-    ///
-    /// result = Kkachi.refine("question -> code") \
-    ///     .validate(validator) \
-    ///     .run("Write a URL parser", generate)
-    /// ```
-    fn validate(&self, pipeline: PyCliPipeline) -> Self {
+    /// Require a pattern in the output.
+    fn require(&self, pattern: String) -> Self {
         let mut new = self.clone();
-        new.cli_pipeline = Some(pipeline.into_inner());
+        new.require_patterns.push(pattern);
         new
     }
 
-    /// Use a heuristic critic with length bounds.
-    #[pyo3(signature = (min_length=None, max_length=None))]
-    fn critic_heuristic(&self, min_length: Option<usize>, max_length: Option<usize>) -> Self {
+    /// Forbid a pattern in the output.
+    fn forbid(&self, pattern: String) -> Self {
         let mut new = self.clone();
-        new.cli_pipeline = None;
-        new.min_length = min_length;
-        new.max_length = max_length;
+        new.forbid_patterns.push(pattern);
         new
     }
 
-    // ===== Similarity & Retrieval =====
-
-    /// Enable or disable semantic cache.
-    fn semantic_cache(&self, enabled: bool) -> Self {
+    /// Set minimum output length.
+    fn min_len(&self, n: usize) -> Self {
         let mut new = self.clone();
-        new.use_semantic_cache = enabled;
+        new.min_length = Some(n);
         new
     }
 
-    /// Set similarity threshold for cache hit.
-    fn similarity_threshold(&self, threshold: f32) -> Self {
+    /// Set maximum output length.
+    fn max_len(&self, n: usize) -> Self {
         let mut new = self.clone();
-        new.similarity_threshold = threshold;
+        new.max_length = Some(n);
         new
     }
-
-    /// Enable or disable auto-condensation.
-    fn auto_condense(&self, enabled: bool) -> Self {
-        let mut new = self.clone();
-        new.auto_condense = enabled;
-        new
-    }
-
-    /// Set cluster threshold.
-    fn cluster_threshold(&self, threshold: f32) -> Self {
-        let mut new = self.clone();
-        new.cluster_threshold = threshold;
-        new
-    }
-
-    /// Set minimum cluster size.
-    fn min_cluster_size(&self, size: usize) -> Self {
-        let mut new = self.clone();
-        new.min_cluster_size = size;
-        new
-    }
-
-    /// Set similarity weights.
-    fn similarity_weights(&self, weights: PySimilarityWeights) -> Self {
-        let mut new = self.clone();
-        new.similarity_weights = Some((&weights).into());
-        new
-    }
-
-    // ===== Few-Shot =====
-
-    /// Set number of few-shot examples.
-    fn few_shot_k(&self, k: usize) -> Self {
-        let mut new = self.clone();
-        new.few_shot_k = Some(k);
-        new
-    }
-
-    /// Use few-shot examples as demonstrations.
-    fn few_shot_as_demos(&self, enabled: bool) -> Self {
-        let mut new = self.clone();
-        new.few_shot_as_demos = enabled;
-        new
-    }
-
-    /// Refresh examples each iteration.
-    fn few_shot_refresh(&self, enabled: bool) -> Self {
-        let mut new = self.clone();
-        new.few_shot_refresh = enabled;
-        new
-    }
-
-    // ===== DSPy Integration =====
-
-    /// Enable chain of thought reasoning.
-    fn with_chain_of_thought(&self) -> Self {
-        let mut new = self.clone();
-        new.use_cot = true;
-        new
-    }
-
-    /// Enable best-of-N sampling.
-    fn with_best_of_n(&self, n: u8) -> Self {
-        let mut new = self.clone();
-        new.best_of_n = Some(n);
-        new
-    }
-
-    // ===== Execute =====
 
     /// Run the refinement pipeline.
     ///
     /// Args:
-    ///     question: The question/input to refine.
-    ///     generate: A callable that takes (iteration, feedback) and returns output.
+    ///     generate: A callable that takes (iteration, prompt, feedback) and returns output.
     ///
     /// Returns:
-    ///     RefinementResult: The result containing the final answer and metadata.
-    fn run(&self, question: String, generate: PyObject) -> PyResult<PyRefinementResult> {
-        // Build the Rust RefineBuilder
-        let mut builder = Kkachi::refine(&self.signature);
+    ///     RefineResult: The result containing the final output and metadata.
+    fn run(&self, generate: PyObject) -> PyResult<PyRefineResult> {
+        // Create a mock LLM that calls the Python function
+        let responses: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let prompt = self.prompt.clone();
 
-        if let Some(ref domain) = self.domain {
-            builder = builder.domain(domain);
-        }
-        if let Some(ref path) = self.storage_path {
-            builder = builder.storage(path);
-        }
-
-        builder = builder.max_iterations(self.max_iterations);
-        builder = builder.until_score(self.score_threshold);
-
-        if let (Some(threshold), Some(window)) = (self.plateau_threshold, self.plateau_window) {
-            builder = builder.until_plateau(threshold, window);
-        }
-
-        // Set validator
-        if let Some(ref pipeline) = self.cli_pipeline {
-            builder = builder.validate(pipeline.clone());
-        } else {
-            builder = builder.critic_heuristic(self.min_length, self.max_length);
-        }
-
-        // Similarity settings
-        builder = builder.semantic_cache(self.use_semantic_cache);
-        builder = builder.similarity_threshold(self.similarity_threshold);
-        builder = builder.auto_condense(self.auto_condense);
-        builder = builder.cluster_threshold(self.cluster_threshold);
-        builder = builder.min_cluster_size(self.min_cluster_size);
-
-        if let Some(ref weights) = self.similarity_weights {
-            builder = builder.similarity_weights(*weights);
-        }
-
-        // Few-shot
-        if let Some(k) = self.few_shot_k {
-            builder = builder.few_shot_k(k);
-        }
-        builder = builder.few_shot_as_demos(self.few_shot_as_demos);
-        builder = builder.few_shot_refresh(self.few_shot_refresh);
-
-        // DSPy integration
-        if self.use_cot {
-            builder = builder.with_chain_of_thought();
-        }
-        if let Some(n) = self.best_of_n {
-            builder = builder.with_best_of_n(n);
-        }
-
-        // Create the generate function that calls Python
-        let generate_fn = |iteration: u32, feedback: Option<&str>| -> kkachi::Result<String> {
-            Python::with_gil(|py| {
-                let feedback_arg = feedback.map(|s| s.to_string());
+        // Pre-generate responses by calling the Python function
+        Python::with_gil(|py| -> PyResult<()> {
+            for iter in 0..self.max_iterations {
+                let feedback: Option<String> = None;
                 let result = generate
-                    .call1(py, (iteration, feedback_arg))
-                    .map_err(|e| kkachi::Error::module(format!("Python generate error: {}", e)))?;
+                    .call1(py, (iter, prompt.clone(), feedback))
+                    .map_err(|e| {
+                        pyo3::exceptions::PyRuntimeError::new_err(format!(
+                            "Python generate error: {}",
+                            e
+                        ))
+                    })?;
                 let output: String = result.extract(py).map_err(|e| {
-                    kkachi::Error::module(format!("Python return type error: {}", e))
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "Python return type error: {}",
+                        e
+                    ))
                 })?;
-                Ok(output)
-            })
+                responses.lock().unwrap().push(output);
+            }
+            Ok(())
+        })?;
+
+        let responses_clone = responses.clone();
+        let llm = IterativeMockLlm::new(move |iter, _prompt, _feedback| {
+            let resps = responses_clone.lock().unwrap();
+            let idx = (iter as usize).min(resps.len().saturating_sub(1));
+            resps.get(idx).cloned().unwrap_or_default()
+        });
+
+        // Build the checks validator if patterns are specified
+        let mut check_builder = checks();
+        for pattern in &self.require_patterns {
+            check_builder = check_builder.require(pattern);
+        }
+        for pattern in &self.forbid_patterns {
+            check_builder = check_builder.forbid(pattern);
+        }
+        if let Some(min) = self.min_length {
+            check_builder = check_builder.min_len(min);
+        }
+        if let Some(max) = self.max_length {
+            check_builder = check_builder.max_len(max);
+        }
+
+        // Run refinement
+        let result = if let Some(ref cli) = self.cli_validator {
+            // Use CLI validator
+            refine(&llm, &self.prompt)
+                .validate(cli.clone())
+                .max_iter(self.max_iterations)
+                .target(self.score_threshold)
+                .go_full()
+        } else if !self.require_patterns.is_empty()
+            || !self.forbid_patterns.is_empty()
+            || self.min_length.is_some()
+            || self.max_length.is_some()
+        {
+            // Use checks validator
+            refine(&llm, &self.prompt)
+                .validate(check_builder)
+                .max_iter(self.max_iterations)
+                .target(self.score_threshold)
+                .go_full()
+        } else {
+            // No validation
+            refine(&llm, &self.prompt)
+                .max_iter(self.max_iterations)
+                .target(self.score_threshold)
+                .go_full()
         };
 
-        // Run the refinement
-        let result = builder.run(&question, generate_fn);
-        Ok(result.into())
+        match result {
+            Ok(r) => Ok(r.into()),
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "Refinement error: {}",
+                e
+            ))),
+        }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "RefineBuilder(signature='{}', domain={:?}, max_iterations={})",
-            self.signature, self.domain, self.max_iterations
+            "RefineBuilder(prompt='{}', max_iter={}, target={})",
+            self.prompt, self.max_iterations, self.score_threshold
         )
     }
 }

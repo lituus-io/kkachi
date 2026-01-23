@@ -48,6 +48,10 @@ tiktoken-rs = { workspace = true, optional = true }
 tokenizers = { workspace = true, optional = true }
 text-splitter = { workspace = true, optional = true }
 
+# ONNX Runtime (optional, for semantic embeddings)
+ort = { workspace = true, optional = true }
+ndarray = { workspace = true, optional = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = { workspace = true }
@@ -66,3 +70,9 @@ storage-bundled = ["duckdb-bundled", "native"]
 tiktoken = ["tiktoken-rs", "text-splitter"]
 huggingface = ["tokenizers", "text-splitter"]
 chunking = ["text-splitter"]
+# ONNX-based semantic embeddings (requires downloading models)
+embeddings-onnx = ["ort", "tokenizers", "ndarray"]
+# HNSW approximate nearest neighbor search
+hnsw = []
+# All embedding/index features
+embeddings-full = ["embeddings-onnx", "hnsw"]

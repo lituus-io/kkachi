@@ -28,6 +28,9 @@ serde_json = { workspace = true }
 # Error handling
 thiserror = { workspace = true }
 
+# Async runtime (for blocking on futures from code executor)
+futures = { workspace = true }
+
 [dev-dependencies]
 # For testing
 pyo3 = { version = "0.22", features = ["auto-initialize"] }

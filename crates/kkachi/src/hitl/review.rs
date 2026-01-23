@@ -5,7 +5,7 @@
 //! Review context and decisions for HITL.
 
 use crate::diff::ModuleDiff;
-use crate::recursive::IterationRecord;
+use crate::recursive::Iteration;
 
 /// Reason why a review was triggered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +65,7 @@ pub struct ReviewContext<'a> {
     /// Previous output (for comparison).
     pub prev_output: Option<&'a str>,
     /// Full iteration history.
-    pub history: &'a [IterationRecord<'a>],
+    pub history: &'a [Iteration],
     /// Reason this review was triggered.
     pub trigger: ReviewTrigger,
     /// Domain/category.
@@ -124,7 +124,7 @@ impl<'a> ReviewContext<'a> {
     }
 
     /// Set the iteration history.
-    pub fn with_history(mut self, history: &'a [IterationRecord<'a>]) -> Self {
+    pub fn with_history(mut self, history: &'a [Iteration]) -> Self {
         self.history = history;
         self
     }

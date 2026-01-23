@@ -6,69 +6,50 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Note: Some examples use an older API and need to be updated.
-# They are commented out until the API is stabilized or they are rewritten.
-
-# [[example]]
-# name = "basic_usage"
-# path = "basic_usage.rs"
-
-# [[example]]
-# name = "continuous_learning"
-# path = "continuous_learning.rs"
-
-# [[example]]
-# name = "automated_optimization_pipeline"
-# path = "automated_optimization_pipeline.rs"
-
-# [[example]]
-# name = "production_pipeline"
-# path = "production_pipeline.rs"
-
-# [[example]]
-# name = "cli_driven_pipeline"
-# path = "cli_driven_pipeline.rs"
-
-# [[example]]
-# name = "declarative_api"
-# path = "declarative_api.rs"
+# Examples demonstrating the kkachi recursive refinement API.
 
 [[example]]
-name = "complete_dspy_pipeline"
-path = "complete_dspy_pipeline.rs"
+name = "declarative_api"
+path = "declarative_api.rs"
 
 [[example]]
-name = "repl_hitl_demo"
-path = "repl_hitl_demo.rs"
+name = "cli_driven_pipeline"
+path = "cli_driven_pipeline.rs"
 
 [[example]]
-name = "template_refinement"
-path = "template_refinement.rs"
+name = "continuous_learning"
+path = "continuous_learning.rs"
 
 [[example]]
-name = "template_rag_cli_pipeline"
-path = "template_rag_cli_pipeline.rs"
+name = "cli_recursive_optimization"
+path = "cli_recursive_optimization.rs"
 
 [[example]]
-name = "template_persistent_pipeline"
-path = "template_persistent_pipeline.rs"
+name = "dspy_declarative_pipeline"
+path = "dspy_declarative_pipeline.rs"
 
 [[example]]
-name = "yaml_config_pipeline"
-path = "yaml_config_pipeline.rs"
+name = "pulumi_declarative"
+path = "pulumi_declarative.rs"
+
+[[example]]
+name = "pulumi_gcs_rag_optimizer"
+path = "pulumi_gcs_rag_optimizer.rs"
+
+[[example]]
+name = "rag_recursive_pipeline"
+path = "rag_recursive_pipeline.rs"
+
+[[example]]
+name = "rag_recursive_simple"
+path = "rag_recursive_simple.rs"
 
 [features]
 default = []
 storage = ["kkachi/storage"]
+storage-bundled = ["kkachi/storage-bundled"]
 
 [dependencies]
 kkachi = { path = "../crates/kkachi" }
-kkachi-client = { path = "../crates/kkachi-client" }
-kkachi-eval = { path = "../crates/kkachi-eval" }
-kkachi-cache = { path = "../crates/kkachi-cache" }
 tokio = { version = "1.41", features = ["full", "macros"] }
 anyhow = "1.0"
-async-trait = "0.1"
-chrono = "0.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"

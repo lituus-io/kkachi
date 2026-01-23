@@ -4,7 +4,7 @@
 
 //! REPL session state management.
 
-use kkachi::recursive::{HashEmbedder, InMemoryVectorStore, VectorSearchResult, VectorStore};
+use kkachi::recursive::{memory, Memory, Recall};
 use kkachi::HITLConfig;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use super::pipeline::{Pipeline, PipelineExecutionState};
 
-/// Type alias for the REPL vector store.
-pub type ReplVectorStore = Arc<RwLock<InMemoryVectorStore<HashEmbedder>>>;
+/// Type alias for the REPL memory store.
+pub type ReplMemory = Arc<RwLock<Memory>>;
 
 /// Demo data for sessions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,9 +132,9 @@ impl Default for LMConfig {
     }
 }
 
-/// Create a default vector store.
-fn default_vector_store() -> ReplVectorStore {
-    Arc::new(RwLock::new(InMemoryVectorStore::new(HashEmbedder::new(64))))
+/// Create a default memory store.
+fn default_memory() -> ReplMemory {
+    Arc::new(RwLock::new(memory()))
 }
 
 /// Complete REPL session state.
@@ -170,9 +170,9 @@ pub struct SessionState {
     /// Pipeline execution state (for resuming after HITL).
     #[serde(skip)]
     pub pipeline_execution: Option<PipelineExecutionState>,
-    /// In-memory vector store for document retrieval.
-    #[serde(skip, default = "default_vector_store")]
-    pub vector_store: ReplVectorStore,
+    /// In-memory store for document retrieval.
+    #[serde(skip, default = "default_memory")]
+    pub memory_store: ReplMemory,
 }
 
 impl std::fmt::Debug for SessionState {
@@ -192,8 +192,8 @@ impl std::fmt::Debug for SessionState {
             .field("pipeline", &self.pipeline)
             .field("pipeline_execution", &self.pipeline_execution)
             .field(
-                "vector_store",
-                &format!("<VectorStore: {} docs>", self.store_len()),
+                "memory_store",
+                &format!("<Memory: {} docs>", self.store_len()),
             )
             .finish()
     }
@@ -215,7 +215,7 @@ impl Default for SessionState {
             last_score: None,
             pipeline: None,
             pipeline_execution: None,
-            vector_store: Arc::new(RwLock::new(InMemoryVectorStore::new(HashEmbedder::new(64)))),
+            memory_store: Arc::new(RwLock::new(memory())),
         }
     }
 }
@@ -341,48 +341,46 @@ impl SessionState {
         self.pipeline_execution = None;
     }
 
-    // Vector store methods
+    // Memory store methods
 
-    /// Add a document to the vector store.
+    /// Add a document to the memory store.
     pub fn store_add(&self, id: impl Into<String>, content: impl Into<String>) {
-        self.vector_store.write().add(id, content);
+        self.memory_store.write().add_with_id(id, &content.into());
     }
 
-    /// Remove a document from the vector store.
+    /// Remove a document from the memory store.
     pub fn store_remove(&self, id: &str) -> bool {
-        self.vector_store.write().remove(id)
+        self.memory_store.write().remove(id)
     }
 
-    /// Search the vector store.
-    pub fn store_search(&self, query: &str, k: usize) -> Vec<VectorSearchResult> {
-        self.vector_store.read().search_text(query, k)
+    /// Search the memory store.
+    pub fn store_search(&self, query: &str, k: usize) -> Vec<Recall> {
+        self.memory_store.read().search(query, k)
     }
 
     /// Get a document by ID.
     pub fn store_get(&self, id: &str) -> Option<String> {
-        self.vector_store.read().get(id).map(|s| s.to_string())
+        self.memory_store.read().get(id)
     }
 
     /// Get the number of documents in the store.
     pub fn store_len(&self) -> usize {
-        self.vector_store.read().len()
+        self.memory_store.read().len()
     }
 
     /// Check if the store is empty.
     pub fn store_is_empty(&self) -> bool {
-        self.vector_store.read().is_empty()
+        self.memory_store.read().is_empty()
     }
 
-    /// Clear the vector store.
+    /// Clear the memory store by replacing it with a new one.
     pub fn store_clear(&self) {
-        self.vector_store.write().clear();
+        *self.memory_store.write() = memory();
     }
 
     /// List all document IDs in the store.
     pub fn store_list_ids(&self) -> Vec<String> {
-        // The InMemoryVectorStore doesn't expose an iterator, so we'll need
-        // to add this method or work around it. For now, return empty.
-        // TODO: Expose document listing in InMemoryVectorStore
+        // Memory doesn't expose an iterator, so return empty for now.
         Vec::new()
     }
 }

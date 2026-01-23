@@ -17,22 +17,29 @@
 //! - **TRUE Zero-Copy**: `StrView<'a>` and `BufferView<'a>` for zero-allocation string handling
 //! - **String Interning**: 4-byte `Sym` symbols for field names instead of 24-byte Strings
 //! - **GATs**: Generic Associated Types for zero-cost async without boxing
-//! - **DAG Composition**: Functions compose as directed acyclic graphs for flexible pipelines
 //! - **Streaming Pipelines**: Data flows between modules without full materialization
 //!
 //! ## Quick Start
 //!
 //! ```ignore
-//! use kkachi::prelude::*;
+//! use kkachi::recursive::prelude::*;
 //!
-//! // Create a simple chain of thought module
-//! let cot = ChainOfThought::new(signature!("question -> answer"));
+//! let llm = MockLlm::new(|prompt, _| "fn add(a: i32, b: i32) -> i32 { a + b }".to_string());
 //!
-//! // Build a DAG pipeline
-//! let pipeline = graph!(cot >> validate >> format_output);
+//! // Simple refinement with validation
+//! let code = refine(&llm, "Write an add function")
+//!     .validate(checks().require("fn ").require("->"))
+//!     .max_iter(5)
+//!     .go();
 //!
-//! // Execute
-//! let result = pipeline.execute(inputs).await?;
+//! // CLI validation pipeline
+//! let validator = cli("rustfmt").arg("--check")
+//!     .then("rustc").args(&["--emit=metadata"]).required()
+//!     .ext("rs");
+//!
+//! let code = refine(&llm, "Write a parser")
+//!     .validate(validator)
+//!     .go();
 //! ```
 
 #![warn(missing_docs)]
@@ -59,7 +66,6 @@ pub mod str_view;
 
 // Phase 1: Core infrastructure
 pub mod bootstrap;
-pub mod dag;
 pub mod error;
 pub mod example;
 pub mod field;
@@ -85,7 +91,7 @@ pub mod assertion;
 // Phase 8: Hybrid executor
 pub mod executor;
 
-// Phase 10: Recursive Language Prompting
+// Phase 10: Recursive Language Prompting (simplified API)
 pub mod recursive;
 
 // Phase 11: Diff visualization
@@ -94,7 +100,7 @@ pub mod diff;
 // Phase 12: Human-in-the-Loop
 pub mod hitl;
 
-// Phase 13: Declarative API
+// Phase 13: Declarative API (thin re-export of recursive)
 pub mod declarative;
 
 // Recall/Precision tuning
@@ -115,36 +121,18 @@ pub use signature::{Signature, SignatureBuilder};
 
 // Advanced optimizers
 pub use optimizers::{
-    COPROConfig, COPROResult, CombineStrategy, Embedder, EmbeddingIndex, Ensemble, EnsembleConfig,
-    EnsembleResult, ErasedOptimizer, FailureCase, Improvement, ImprovementKind, KNNConfig,
-    KNNFewShot, KNNSelector, LabeledConfig, LabeledFewShot, LabeledFewShotBuilder, MIPROConfig,
-    MIPROResult, OptimizeInto, SIMBAConfig, SIMBAResult, SelectionStrategy, TPESampler, COPRO,
-    MIPRO, SIMBA,
+    COPROConfig, COPROResult, CombineStrategy, Embedder as OptimizerEmbedder, EmbeddingIndex,
+    Ensemble, EnsembleConfig, EnsembleResult, ErasedOptimizer, FailureCase, Improvement,
+    ImprovementKind, KNNConfig, KNNFewShot, KNNSelector, LabeledConfig, LabeledFewShot,
+    LabeledFewShotBuilder, MIPROConfig, MIPROResult, OptimizeInto, SIMBAConfig, SIMBAResult,
+    SelectionStrategy, TPESampler, COPRO, MIPRO, SIMBA,
 };
 
 // DSPy modules
 pub use modules::{
-    bon_with_pool,
-    multi_chain_with_pool,
-    BestOfN,
-    CandidatePool,
-    CandidatePoolStats,
-    ChainOfThought,
-    ChainPool,
-    ChainPoolStats,
-    CodeExecutor,
-    ExecutionResult,
-    MultiChain,
-    ProgramOfThought,
-    ReAct,
-    Refine,
-    RefineConfig,
-    // Candidate pool for recall/precision tuning
-    ScoredCandidate,
-    // Chain pool for recall/precision tuning
-    ScoredChain,
-    Tool,
-    ToolResult,
+    bon_with_pool, multi_chain_with_pool, BestOfN, CandidatePool, CandidatePoolStats, ChainOfThought,
+    ChainPool, ChainPoolStats, CodeExecutor, ExecutionResult, MultiChain, ProgramOfThought, ReAct,
+    Refine as ModuleRefine, RefineConfig, ScoredCandidate, ScoredChain, Tool, ToolResult,
 };
 
 // Recall/Precision mode
@@ -167,128 +155,43 @@ pub use executor::{
     ScopedBuffer,
 };
 
-// Recursive Language Prompting
-#[cfg(feature = "huggingface")]
-pub use recursive::HuggingFaceTokenizer;
-#[cfg(feature = "tiktoken")]
-pub use recursive::TiktokenTokenizer;
+// Recursive Language Prompting (new simplified API)
 pub use recursive::{
-    refine_loop,
-    All,
-    Any,
-    BatchCondenseResult,
-    BinaryCritic,
-    CachedContext,
-    ChecklistCritic,
-    // ChunkStore
-    ChunkSearchResult,
-    ChunkStore,
-    Cli,
-    CliBinaryCritic,
-    // CLI
-    CliExecutor,
-    CliPipeline,
-    ClusterConfig,
-    ClusterEngine,
-    ClusterInfo,
-    ClusterStats,
-    CommandResult,
-    CompositeVectorStore,
-    CondenseConfig,
-    CondenseEngine,
-    CondenseResult,
-    CondensedDocument,
-    // Storage
-    ContextId,
-    ContextUpdate,
-    ContextView,
-    // Convergence criteria
-    ConvergenceCriterion,
-    // Critics
-    Critic,
-    CriticConfig,
-    CriticResult,
-    DocSource,
-    DocumentCluster,
-    DocumentFeatures,
-    EmbeddingRef,
-    ErrorCountCritic,
-    EvalResult,
-    FewShotConfig,
-    FormatSpec,
-    FormatType,
-    FreshRetrieval,
-    HashEmbedder,
-    HeuristicCritic,
-    HybridRetriever,
-    InMemoryVectorStore,
-    IterationRecord,
-    JsonSchema,
-    KeywordExtractor,
-    // Declarative API
-    Kkachi,
-    LocalSimilarity,
-    MaxIterations,
-    NGramExtractor,
-    NoFeedback,
-    NoProgress,
-    PrintProgress,
-    ProgressCallback,
-    // Prompt tone for recall/precision tuning
-    PromptTone,
-    // Module and builder
-    Recursive,
-    RecursiveBuilder,
-    RecursiveConfig,
-    RecursiveOutput,
-    // State and config
-    RecursiveState,
-    RefineBuilder,
-    RefineResult,
-    // Runner
-    RefinementResult,
-    // Retrieval
-    RetrievalConfig,
-    RetrievalResult,
-    RetrievalStats,
-    RetrievedDoc,
-    RunnerConfig,
-    ScorePlateau,
-    ScoreThreshold,
-    // Similarity and clustering
-    SimilarityWeights,
-    // Tokenization
-    SimpleTokenizer,
-    SmartConvergence,
-    SmartRetriever,
-    StagedCritic,
-    StandaloneRunner,
-    StandardConvergence,
-    StoredChunk,
+    // Core refinement
+    refine, Config as RefineConfig2, Refine as RefineBuilder2, RefineResult,
+    // Validation
+    checks, cli, all, any, Checks, Cli, CliCapture, CliExecutor, All, And, Any, Or, ValidateExt,
+    Validate, Score, NoValidation, AlwaysFail, BoolValidator, FnValidator, ScoreValidator,
+    // Memory/RAG
+    memory, Memory, Document, Recall, Embedder, HashEmbedder, VectorIndex, LinearIndex,
+    cosine_similarity, mmr_select,
+    // LLM trait
+    Llm, LmOutput, MockLlm, IterativeMockLlm, FailingLlm, BoxedLlm,
+    // Results
+    Compiled, ContextId, Correction, Example as RefineExample, Iteration, OptimizedPrompt,
+    // Markdown rewriting
+    rewrite, extract_code, extract_all_code, extract_section, Rewrite,
     // Template
-    Template,
-    TemplateCritic,
-    TemplateExample,
-    TemplateOptions,
-    Tokenizer,
+    FormatSpec, FormatType, JsonSchema, PromptTone, Template, TemplateExample, TemplateOptions,
     ToneModifiers,
-    UpsertResult,
-    ValidationResult,
-    Validator,
-    ValidatorCritic,
-    VectorSearchResult,
-    // VectorStore
-    VectorStore,
-    ZeroEmbedder,
+    // DSPy-style patterns (new API)
+    tool, Tool as DspTool, MockTool as DspMockTool, FnTool, AsyncFnTool, ToolBuilder,
+    CodeExecutor as DspCodeExecutor, ExecutionResult as DspExecutionResult, ProcessExecutor,
+    python_executor, node_executor, bash_executor, ruby_executor,
+    reason, Reason, ReasonConfig as ReasonCfg, ReasonResult,
+    best_of, BestOf, BestOfConfig, BestOfResult, Scorer, DefaultScorer, FnScorer,
+    CandidatePool as DspCandidatePool, ScoredCandidate as DspScoredCandidate, PoolStats,
+    ensemble, Ensemble as DspEnsemble, EnsembleConfig as DspEnsembleConfig, EnsembleResult as DspEnsembleResult,
+    Aggregate, ConsensusPool, ChainResult,
+    agent, Agent, AgentConfig, AgentResult, Step,
+    program, Program, ProgramConfig, ProgramResult,
 };
-// Chunking
-#[cfg(any(feature = "tiktoken", feature = "huggingface", feature = "chunking"))]
-pub use recursive::{
-    chain, ChainBuilder, ChainedOutput, ChunkConfig, ChunkMetadata, ChunkStrategy, DependencyRules,
-    OutputChunk, SectionType, TextChunk, TextChunker,
-};
-#[cfg(any(feature = "storage", feature = "storage-bundled"))]
-pub use recursive::{ContextStore, RecursiveRunner};
+
+// Feature-gated recursive exports
+#[cfg(feature = "embeddings-onnx")]
+pub use recursive::{OnnxEmbedder, OnnxEmbedderError};
+#[cfg(feature = "hnsw")]
+pub use recursive::HnswIndex;
 
 // Diff visualization
 pub use diff::{
@@ -303,35 +206,8 @@ pub use hitl::{
     ThresholdReviewer,
 };
 
-// Declarative API (new zero-copy fluent builder)
-pub use declarative::{
-    pipe,
-    pipeline,
-    Check,
-    CheckBuilder,
-    CheckKind,
-    FluentPipeline,
-    LiveRag,
-    NoCritic,
-    NoStrategy,
-    PipelineOutput,
-    PipelineOutputOwned,
-    RagAnalyzer,
-    // RAG
-    RagExample,
-    StageCorrection,
-    // Steps
-    Step,
-    StepBuilder,
-    StepResult,
-    Steps,
-    StepsOutput,
-    WithBestOfN,
-    WithCoT,
-    WithMultiChain,
-    // Re-exports from declarative
-    LLM as DeclLLM,
-};
+// Declarative API (thin re-export of recursive + Jinja)
+pub use declarative::{JinjaTemplate, JinjaValue};
 
 // Zero-copy types
 pub use buffer::{Buffer, BufferView};
@@ -339,135 +215,55 @@ pub use intern::{resolve, sym, Sym};
 pub use str_view::StrView;
 pub use types::{FieldMap, Inputs};
 
-// DAG types
-pub use dag::{Graph, Node};
-
 /// Prelude module for convenient imports.
 pub mod prelude {
+    // New simplified recursive API
+    pub use crate::recursive::prelude::*;
+
+    // Error handling
+    pub use crate::{Error, OptimizationDetails, Result};
+
+    // Zero-copy types
+    pub use crate::{Buffer, BufferView, StrView, Sym, resolve, sym};
+
+    // Core types
     pub use crate::{
-        bon_with_pool,
-        multi_chain_with_pool,
-        pipe,
-        // Declarative API (primary entry point)
-        pipeline,
-        predict_with_lm,
-        resolve,
-        sym,
-        // Adapters
-        Adapter,
-        // Assertions
-        Assertion,
-        AssertionLevel,
-        AssertionRunner,
-        BatchRunner,
-        BestOfN,
-        BinaryCritic,
-        BootstrapFewShot,
-        // Zero-copy types
-        Buffer,
-        BufferPool,
-        BufferView,
-        CandidatePool,
-        CandidatePoolStats,
-        // DSPy modules
-        ChainOfThought,
-        ChainPool,
-        ChainPoolStats,
-        ChatAdapter,
-        ChecklistCritic,
-        CodeExecutor,
-        Contains,
-        ConvergenceCriterion,
-        Critic,
-        CriticResult,
-        DeclLLM,
-        // Diff
-        DiffStyle,
-        Ensemble,
-        // Error handling
-        Error,
-        Example,
-        ExampleSet,
-        ExecutionResult,
-        ExecutorConfig,
-        Field,
-        FluentPipeline,
-        FormatType,
-        Graph,
-        // HITL
-        HITLConfig,
-        HeuristicCritic,
-        // Executor
-        HybridExecutor,
-        InputField,
-        Inputs,
-        JSONAdapter,
-        JsonValid,
-        KNNFewShot,
-        LMClient,
-        LabeledFewShot,
-        LengthBounds,
-        LiveRag,
-        MaxIterations,
-        // Module system
-        Module,
-        MultiChain,
-        NoCritic,
-        NoStrategy,
-        // DAG system
-        Node,
-        NotEmpty,
-        OptimizationDetails,
-        // Basic optimizer system
-        Optimizer,
-        OptimizerConfig,
-        OutputField,
-        // Pipeline outputs
-        PipelineOutput,
-        PipelineOutputOwned,
-        Predict,
-        Prediction,
-        ProgramOfThought,
-        // Prompt tone for recall/precision
-        PromptTone,
-        RagExample,
-        ReAct,
-        // Recall/Precision mode
-        RecallPrecisionMode,
-        RecursiveConfig,
-        RecursiveOutput,
-        // Recursive Language Prompting
-        RecursiveState,
-        Refine,
-        RefineConfig,
-        RegexMatch,
-        Result,
-        ReviewDecision,
-        ScoreThreshold,
-        // Candidate pool for recall/precision
-        ScoredCandidate,
-        // Chain pool for recall/precision
-        ScoredChain,
-        // Core types
-        Signature,
-        SignatureBuilder,
-        StandardConvergence,
-        Step,
-        Steps,
-        StrView,
-        Sym,
-        // Template
-        Template,
-        TemplateCritic,
-        TemplateExample,
-        Tool,
-        ToolResult,
-        XMLAdapter,
-        // Advanced optimizers
-        COPRO,
-        MIPRO,
-        SIMBA,
+        Example, Field, FieldMap, InputField, Inputs, Module, OutputField, Predict, Prediction,
+        Signature, SignatureBuilder,
     };
+
+    // Optimizer system
+    pub use crate::{
+        BootstrapFewShot, ExampleSet, Optimizer, OptimizerConfig, COPRO, MIPRO, SIMBA,
+    };
+
+    // DSPy modules (old API - kept for compatibility)
+    pub use crate::{
+        BestOfN, CandidatePool as OldCandidatePool, ChainOfThought, ChainPool, CodeExecutor as OldCodeExecutor, ExecutionResult,
+        MultiChain, ProgramOfThought, ReAct, ModuleRefine, RefineConfig, ScoredCandidate as OldScoredCandidate,
+        ScoredChain, Tool as OldTool, ToolResult, bon_with_pool, multi_chain_with_pool,
+    };
+
+    // Adapters
+    pub use crate::{Adapter, ChatAdapter, JSONAdapter, XMLAdapter};
+
+    // Assertions
+    pub use crate::{Assertion, AssertionLevel, AssertionRunner};
+
+    // Executor
+    pub use crate::{BatchRunner, BufferPool, ExecutorConfig, HybridExecutor};
+
+    // Diff
+    pub use crate::DiffStyle;
+
+    // HITL
+    pub use crate::{HITLConfig, ReviewDecision};
+
+    // Recall/Precision
+    pub use crate::RecallPrecisionMode;
+
+    // LM Client
+    pub use crate::{LMClient, predict_with_lm};
 }
 
 /// Version of the library

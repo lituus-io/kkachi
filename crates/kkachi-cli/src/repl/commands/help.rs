@@ -95,7 +95,6 @@ impl Command for HelpCommand {
                 ),
             ))
         } else {
-            // TODO: Show detailed help for specific command
             Output::text(format!(
                 "Help for '{}': Use 'help' without arguments to see all commands.",
                 args

@@ -51,6 +51,44 @@ from kkachi._kkachi import (
     # VectorStore types
     VectorSearchResult,
     InMemoryVectorStore,
+    # Validators & Composition
+    Checks,
+    Semantic,
+    Validator,
+    ScoreResult,
+    # Template system
+    Template,
+    FormatType,
+    PromptTone,
+    # DSPy-style entry point functions
+    reason,
+    best_of,
+    ensemble,
+    agent,
+    program,
+    # DSPy-style builders
+    ReasonBuilder,
+    BestOfBuilder,
+    EnsembleBuilder,
+    AgentBuilder,
+    ProgramBuilder,
+    # DSPy-style result types
+    ReasonResult,
+    BestOfResult,
+    EnsembleResult,
+    AgentResult,
+    ProgramResult,
+    ExecutionResult,
+    # DSPy-style pool/candidate types
+    CandidatePool,
+    ScoredCandidate,
+    PoolStats,
+    ConsensusPool,
+    ChainResult,
+    Step,
+    # DSPy-style tool and executor
+    ToolDef,
+    Executor,
     # Version
     __version__,
 )
@@ -75,6 +113,44 @@ __all__ = [
     # VectorStore types
     "VectorSearchResult",
     "InMemoryVectorStore",
+    # Validators & Composition
+    "Checks",
+    "Semantic",
+    "Validator",
+    "ScoreResult",
+    # Template system
+    "Template",
+    "FormatType",
+    "PromptTone",
+    # DSPy-style entry point functions
+    "reason",
+    "best_of",
+    "ensemble",
+    "agent",
+    "program",
+    # DSPy-style builders
+    "ReasonBuilder",
+    "BestOfBuilder",
+    "EnsembleBuilder",
+    "AgentBuilder",
+    "ProgramBuilder",
+    # DSPy-style result types
+    "ReasonResult",
+    "BestOfResult",
+    "EnsembleResult",
+    "AgentResult",
+    "ProgramResult",
+    "ExecutionResult",
+    # DSPy-style pool/candidate types
+    "CandidatePool",
+    "ScoredCandidate",
+    "PoolStats",
+    "ConsensusPool",
+    "ChainResult",
+    "Step",
+    # DSPy-style tool and executor
+    "ToolDef",
+    "Executor",
     # Version
     "__version__",
 ]

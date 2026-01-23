@@ -4,56 +4,36 @@
 
 //! Continuous Learning Pipeline
 //!
-//! This example shows how to implement a continuous learning system that:
-//! - Monitors production predictions
-//! - Collects correction feedback
-//! - Automatically retrains when accuracy drops
-//! - Deploys improved models
+//! This example demonstrates a continuous learning system that:
+//! - Monitors predictions and collects feedback
+//! - Stores successful refinements for future retrieval (RAG)
+//! - Uses feedback to improve code generation
 //!
 //! Run with: cargo run --example continuous_learning
 
-use kkachi::*;
-use kkachi::predict::{LMClient, LMResponse};
-use kkachi::prediction::TokenUsage;
-use async_trait::async_trait;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-// Production-ready LM client wrapper
-struct ProductionLM {
-    // In real usage, this would be an OpenAI/Anthropic client
-    responses: std::collections::HashMap<String, String>,
-}
+use kkachi::error::Result;
+use kkachi::recursive::{
+    checks, memory, refine, Memory, IterativeMockLlm,
+};
 
-impl ProductionLM {
-    fn new() -> Self {
-        let mut responses = std::collections::HashMap::new();
-        responses.insert("classify_spam".to_string(), "Classification: spam".to_string());
-        responses.insert("classify_ham".to_string(), "Classification: not spam".to_string());
-        Self { responses }
-    }
-}
+// ============================================================================
+// Feedback Storage
+// ============================================================================
 
-#[async_trait]
-impl LMClient for ProductionLM {
-    async fn generate(&self, prompt: &str) -> kkachi::Result<LMResponse> {
-        // Simple classification based on keywords
-        let text = if prompt.contains("buy now") || prompt.contains("winner") {
-            "Classification: spam"
-        } else {
-            "Classification: not spam"
-        }.to_string();
-
-        Ok(LMResponse {
-            text,
-            usage: Some(TokenUsage::new(20, 10)),
-        })
-    }
-}
-
-// Feedback storage with thread-safe access
+/// Thread-safe storage for user corrections
 struct FeedbackStore {
-    corrections: Arc<Mutex<Vec<(String, String, String)>>>,
+    corrections: Arc<Mutex<Vec<Correction>>>,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct Correction {
+    question: String,
+    original_answer: String,
+    corrected_answer: String,
+    timestamp: u64,
 }
 
 impl FeedbackStore {
@@ -63,180 +43,303 @@ impl FeedbackStore {
         }
     }
 
-    fn add_correction(&self, input: String, predicted: String, correct: String) {
+    fn add_correction(&self, question: &str, original: &str, corrected: &str) {
         let mut corrections = self.corrections.lock().unwrap();
-        println!("  📝 Correction recorded: predicted '{}', should be '{}'",
-            predicted, correct);
-        corrections.push((input, predicted, correct));
+        corrections.push(Correction {
+            question: question.to_string(),
+            original_answer: original.to_string(),
+            corrected_answer: corrected.to_string(),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        });
     }
 
-    fn get_corrections(&self) -> Vec<(String, String, String)> {
+    #[allow(dead_code)]
+    fn get_corrections(&self) -> Vec<Correction> {
         self.corrections.lock().unwrap().clone()
     }
 
-    fn correction_rate(&self) -> f64 {
-        let corrections = self.corrections.lock().unwrap();
-        // In production, track total predictions
-        corrections.len() as f64
+    fn correction_count(&self) -> usize {
+        self.corrections.lock().unwrap().len()
     }
 }
 
-// Continuous learning orchestrator
-struct ContinuousLearner {
-    signature: Signature<'static>,
-    lm_client: Arc<dyn LMClient>,
-    current_model: Predict<'static>,
-    feedback_store: FeedbackStore,
-    retraining_threshold: usize,
+// ============================================================================
+// Accuracy Monitor
+// ============================================================================
+
+/// Tracks prediction accuracy over time
+struct AccuracyMonitor {
+    predictions: Arc<Mutex<Vec<PredictionRecord>>>,
+    accuracy_threshold: f64,
 }
 
-impl ContinuousLearner {
-    fn new(signature: Signature<'static>, lm_client: Arc<dyn LMClient>) -> Self {
-        let model = Predict::new(signature.clone()).with_lm(lm_client.clone());
+#[derive(Clone)]
+#[allow(dead_code)]
+struct PredictionRecord {
+    question: String,
+    prediction: String,
+    was_correct: Option<bool>,
+    score: f64,
+}
 
+impl AccuracyMonitor {
+    fn new(threshold: f64) -> Self {
         Self {
-            signature,
-            lm_client,
-            current_model: model,
-            feedback_store: FeedbackStore::new(),
-            retraining_threshold: 3,
+            predictions: Arc::new(Mutex::new(Vec::new())),
+            accuracy_threshold: threshold,
         }
     }
 
-    async fn predict(&self, input: &str) -> kkachi::Result<String> {
-        let mut inputs = types::Inputs::new();
-        inputs.insert("email", input);
-
-        let prediction = self.current_model.forward(inputs).await?;
-        Ok(prediction.get("classification")
-            .unwrap_or("unknown")
-            .to_string())
+    fn record_prediction(&self, question: &str, prediction: &str, score: f64) {
+        let mut predictions = self.predictions.lock().unwrap();
+        predictions.push(PredictionRecord {
+            question: question.to_string(),
+            prediction: prediction.to_string(),
+            was_correct: None,
+            score,
+        });
     }
 
-    fn submit_correction(&self, input: String, predicted: String, correct: String) {
-        self.feedback_store.add_correction(input, predicted, correct);
+    fn mark_correct(&self, index: usize, correct: bool) {
+        let mut predictions = self.predictions.lock().unwrap();
+        if let Some(record) = predictions.get_mut(index) {
+            record.was_correct = Some(correct);
+        }
+    }
+
+    fn get_accuracy(&self) -> f64 {
+        let predictions = self.predictions.lock().unwrap();
+        let labeled: Vec<_> = predictions.iter().filter(|p| p.was_correct.is_some()).collect();
+        if labeled.is_empty() {
+            return 1.0;
+        }
+        let correct = labeled.iter().filter(|p| p.was_correct == Some(true)).count();
+        correct as f64 / labeled.len() as f64
     }
 
     fn should_retrain(&self) -> bool {
-        let corrections = self.feedback_store.get_corrections();
-        corrections.len() >= self.retraining_threshold
+        self.get_accuracy() < self.accuracy_threshold
     }
 
-    async fn retrain(&mut self) -> kkachi::Result<()> {
-        println!("\n🔄 Triggering automatic retraining...");
-
-        let corrections = self.feedback_store.get_corrections();
-        println!("  Training on {} corrections", corrections.len());
-
-        // Build training set from corrections
-        let mut training_set = Vec::new();
-        for (input, _predicted, correct) in corrections {
-            let mut example = Example::new();
-            example.insert_input("email", input);
-            example.insert_output("classification", correct);
-            training_set.push(example.into_owned());
-        }
-
-        // Create optimizer
-        let config = OptimizerConfig {
-            max_iterations: 1,
-            batch_size: training_set.len(),
-            seed: 42,
-            metric_threshold: Some(0.9),
-        };
-
-        let optimizer = BootstrapFewShot::new(config)
-            .with_max_demos(training_set.len());
-
-        // Create a new model for optimization (Predict doesn't impl Clone)
-        let base_model = Predict::new(self.signature.clone())
-            .with_lm(self.lm_client.clone());
-
-        // Optimize
-        let optimized = optimizer.optimize(base_model, &training_set).await?;
-
-        // Update model
-        self.current_model = optimized;
-
-        println!("  ✅ Model retrained and deployed");
-
-        Ok(())
+    fn prediction_count(&self) -> usize {
+        self.predictions.lock().unwrap().len()
     }
 }
 
-#[tokio::main]
-async fn main() -> kkachi::Result<()> {
-    println!("\n╔════════════════════════════════════════════════════════════╗");
-    println!("║           Continuous Learning Pipeline Demo               ║");
-    println!("╚════════════════════════════════════════════════════════════╝\n");
+// ============================================================================
+// Continuous Learning System
+// ============================================================================
 
-    // Initialize
-    let signature = Signature::parse("email -> classification")?.into_owned();
-    let lm_client = Arc::new(ProductionLM::new());
-    let mut learner = ContinuousLearner::new(signature, lm_client);
+/// Main system that coordinates learning from feedback
+struct ContinuousLearningSystem {
+    memory: Memory,
+    feedback_store: FeedbackStore,
+    accuracy_monitor: AccuracyMonitor,
+    generation_count: usize,
+}
 
-    println!("📧 Email Spam Classifier - Continuous Learning Enabled\n");
+impl ContinuousLearningSystem {
+    fn new() -> Self {
+        Self {
+            memory: memory(),
+            feedback_store: FeedbackStore::new(),
+            accuracy_monitor: AccuracyMonitor::new(0.8),
+            generation_count: 0,
+        }
+    }
 
-    // Simulate production usage with feedback
-    let test_cases = vec![
-        ("Check out this amazing offer!", "spam"),
-        ("Meeting at 3pm tomorrow", "not spam"),
-        ("You are a winner! Click here!", "spam"),
-        ("Quarterly report attached", "not spam"),
-        ("Buy now for 50% off!!!", "spam"),
-    ];
+    /// Add seed examples to bootstrap the system
+    fn seed_examples(&mut self, examples: &[(&str, &str, &str)]) {
+        for (id, question, answer) in examples {
+            let content = format!("Q: {}\nA: {}", question, answer);
+            self.memory.add_tagged(id, &content);
+        }
+    }
 
-    println!("🔍 Processing emails and collecting feedback...\n");
+    /// Generate code with refinement
+    fn generate(&mut self, question: &str) -> Result<(String, f64)> {
+        self.generation_count += 1;
 
-    for (i, (email, correct_label)) in test_cases.iter().enumerate() {
-        println!("Email #{}: \"{}\"", i + 1, email);
+        // Retrieve similar examples for context
+        let similar = self.memory.search(question, 3);
+        println!("  Retrieved {} similar examples for context", similar.len());
 
-        // Make prediction
-        let prediction = learner.predict(email).await?;
-        println!("  Predicted: {}", prediction);
+        // Create a checklist validator for code quality
+        let validator = checks()
+            .require("fn ")
+            .require("->")
+            .forbid("TODO")
+            .min_len(20);
 
-        // Simulate user correction if wrong
-        if !prediction.contains(correct_label) {
-            println!("  ❌ Incorrect! User provides correction: {}", correct_label);
-            learner.submit_correction(
-                email.to_string(),
-                prediction,
-                correct_label.to_string(),
-            );
+        // Create a mock LLM that improves over iterations
+        let q = question.to_string();
+        let responses = [
+            format!("fn process() {{ /* {} */ }}", q),
+            "/// Process data\nfn process() -> String { \"result\".into() }".to_string(),
+            "/// Processes the input.\n/// Returns the result.\nfn process(input: &str) -> String {\n    input.to_uppercase()\n}".to_string(),
+        ];
+        let llm = IterativeMockLlm::new(move |iter, _prompt, _feedback| {
+            let idx = (iter as usize).min(responses.len() - 1);
+            responses[idx].clone()
+        });
 
-            // Check if we should retrain
-            if learner.should_retrain() {
-                learner.retrain().await?;
-            }
-        } else {
-            println!("  ✅ Correct!");
+        // Run refinement
+        let result = refine(&llm, question)
+            .validate(validator)
+            .max_iter(5)
+            .target(1.0)
+            .go_full()?;
+
+        // Record the prediction
+        self.accuracy_monitor.record_prediction(question, &result.output, result.score);
+
+        Ok((result.output, result.score))
+    }
+
+    /// Submit user feedback/correction
+    fn submit_feedback(&mut self, question: &str, original: &str, corrected: &str, was_correct: bool) {
+        // Store the correction
+        self.feedback_store.add_correction(question, original, corrected);
+
+        // Update accuracy tracking
+        let count = self.accuracy_monitor.prediction_count();
+        if count > 0 {
+            self.accuracy_monitor.mark_correct(count - 1, was_correct);
         }
 
-        println!();
+        // If correction provided, add to memory for future retrieval
+        if !was_correct && !corrected.is_empty() {
+            let id = format!("correction:{}", self.feedback_store.correction_count());
+            let content = format!("Q: {}\nA: {}", question, corrected);
+            self.memory.add_tagged(&id, &content);
+            println!("  Added correction to knowledge base");
+        }
     }
 
-    // Test improved model
-    println!("\n🎯 Testing improved model on new examples...\n");
+    /// Check if retraining is needed
+    fn check_and_retrain(&self) -> bool {
+        if self.accuracy_monitor.should_retrain() {
+            println!("\n⚠️  Accuracy dropped below threshold!");
+            println!("   Current accuracy: {:.1}%", self.accuracy_monitor.get_accuracy() * 100.0);
+            println!("   Corrections available: {}", self.feedback_store.correction_count());
+            println!("   → Retraining would incorporate {} corrections", self.feedback_store.correction_count());
+            true
+        } else {
+            false
+        }
+    }
 
-    let new_emails = vec![
-        "Limited time offer - act now!",
-        "Project deadline reminder",
-        "Congratulations! You won a prize!",
+    fn get_stats(&self) -> (usize, f64, usize) {
+        (
+            self.generation_count,
+            self.accuracy_monitor.get_accuracy(),
+            self.feedback_store.correction_count(),
+        )
+    }
+}
+
+// ============================================================================
+// Main
+// ============================================================================
+
+fn main() -> Result<()> {
+    println!("═══════════════════════════════════════════════════════════════════");
+    println!("            Continuous Learning Pipeline Demo");
+    println!("═══════════════════════════════════════════════════════════════════\n");
+
+    let mut system = ContinuousLearningSystem::new();
+
+    // Step 1: Seed with initial examples
+    println!("Step 1: Seeding knowledge base...");
+    system.seed_examples(&[
+        ("rust:parse", "How to parse JSON?", "use serde_json;\nfn parse(s: &str) -> Value { serde_json::from_str(s).unwrap() }"),
+        ("rust:file", "How to read a file?", "use std::fs;\nfn read(path: &str) -> String { fs::read_to_string(path).unwrap() }"),
+        ("rust:http", "How to make HTTP request?", "use reqwest;\nasync fn get(url: &str) -> String { reqwest::get(url).await.unwrap().text().await.unwrap() }"),
+    ]);
+    println!("  Loaded 3 seed examples\n");
+
+    // Step 2: Generate some predictions
+    println!("Step 2: Running predictions...\n");
+
+    let questions = [
+        "Write a function to uppercase a string",
+        "How to parse TOML config?",
+        "Write error handling code",
     ];
 
-    for email in new_emails {
-        let prediction = learner.predict(email).await?;
-        println!("  \"{}\" → {}", email, prediction);
+    for (i, question) in questions.iter().enumerate() {
+        println!("  Prediction {}:", i + 1);
+        println!("  Question: {}", question);
+
+        let (answer, score) = system.generate(question)?;
+        println!("  Score: {:.2}", score);
+        println!("  Answer preview: {}...\n", &answer[..answer.len().min(50)]);
+
+        // Simulate user feedback
+        let was_correct = score >= 0.8;
+        if !was_correct {
+            system.submit_feedback(
+                question,
+                &answer,
+                "/// Corrected version\nfn corrected() -> String { \"fixed\".into() }",
+                false,
+            );
+        } else {
+            system.submit_feedback(question, &answer, "", true);
+        }
     }
 
-    println!("\n💡 Key Features Demonstrated:");
-    println!("  ✅ Real-time feedback collection");
-    println!("  ✅ Automatic retraining triggers");
-    println!("  ✅ Zero-downtime model updates");
-    println!("  ✅ Thread-safe feedback storage");
-    println!("  ✅ Production-ready architecture");
+    // Step 3: Check if retraining is needed
+    println!("Step 3: Checking system health...");
+    system.check_and_retrain();
 
-    println!("\n╚════════════════════════════════════════════════════════════╝\n");
+    // Step 4: Show final statistics
+    let (generations, accuracy, corrections) = system.get_stats();
+    println!("\n═══════════════════════════════════════════════════════════════════");
+    println!("                        STATISTICS");
+    println!("═══════════════════════════════════════════════════════════════════");
+    println!("  Total generations: {}", generations);
+    println!("  Current accuracy:  {:.1}%", accuracy * 100.0);
+    println!("  Corrections stored: {}", corrections);
+    println!();
+
+    // Step 5: Demonstrate using refine() with memory
+    println!("Step 5: Using refine() with memory...\n");
+
+    let responses = [
+        "read file",
+        "fn read(p: &str) -> String { std::fs::read_to_string(p).unwrap() }",
+        "/// Reads file contents safely.\nfn read(path: &str) -> Result<String, std::io::Error> {\n    std::fs::read_to_string(path)\n}",
+    ];
+    let llm = IterativeMockLlm::new(move |iter, _prompt, _feedback| {
+        let idx = (iter as usize).min(responses.len() - 1);
+        responses[idx].to_string()
+    });
+
+    let validator = checks()
+        .require("fn ")
+        .require("->")
+        .min_len(20);
+
+    let result = refine(&llm, "Write a safe file reader")
+        .validate(validator)
+        .max_iter(5)
+        .target(0.9)
+        .on_iter(|iter, score| {
+            println!("    Iteration {}: score = {:.2}", iter, score);
+        })
+        .go_full()?;
+
+    println!("\n  Final result:");
+    println!("    Score: {:.2}", result.score);
+    println!("    Iterations: {}", result.iterations);
+
+    println!("\n═══════════════════════════════════════════════════════════════════");
+    println!("                      Demo Complete!");
+    println!("═══════════════════════════════════════════════════════════════════\n");
 
     Ok(())
 }

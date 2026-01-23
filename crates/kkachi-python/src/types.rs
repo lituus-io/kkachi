@@ -6,45 +6,41 @@
 //! Python type wrappers for Kkachi types.
 
 use pyo3::prelude::*;
-use std::collections::HashMap;
 
-use kkachi::recursive::{
-    HashEmbedder, InMemoryVectorStore, RefineResult, RefinementResult, VectorSearchResult,
-    VectorStore,
-};
+use kkachi::recursive::{memory, Memory, Recall, RefineResult};
 
 /// Result from a refinement operation.
-#[pyclass(name = "RefinementResult")]
+#[pyclass(name = "RefineResult")]
 #[derive(Clone)]
-pub struct PyRefinementResult {
-    /// The final answer.
+pub struct PyRefineResult {
+    /// The final output.
     #[pyo3(get)]
-    pub answer: String,
-    /// Summary of the answer.
-    #[pyo3(get)]
-    pub summary: String,
+    pub output: String,
     /// Final quality score (0.0 - 1.0).
     #[pyo3(get)]
     pub score: f64,
     /// Number of iterations taken.
     #[pyo3(get)]
-    pub iterations: usize,
+    pub iterations: u32,
     /// Whether result came from cache.
     #[pyo3(get)]
     pub from_cache: bool,
+    /// Context ID for tracking.
+    #[pyo3(get)]
+    pub context_id: String,
 }
 
 #[pymethods]
-impl PyRefinementResult {
+impl PyRefineResult {
     fn __repr__(&self) -> String {
         format!(
-            "RefinementResult(score={:.3}, iterations={}, from_cache={})",
+            "RefineResult(score={:.3}, iterations={}, from_cache={})",
             self.score, self.iterations, self.from_cache
         )
     }
 
     fn __str__(&self) -> String {
-        self.answer.clone()
+        self.output.clone()
     }
 
     /// Check if the refinement was successful (score >= 0.8).
@@ -53,73 +49,22 @@ impl PyRefinementResult {
     }
 }
 
-impl From<RefinementResult> for PyRefinementResult {
-    fn from(r: RefinementResult) -> Self {
-        Self {
-            answer: r.answer,
-            summary: r.summary,
-            score: r.score,
-            iterations: r.iterations,
-            from_cache: r.from_cache,
-        }
-    }
-}
-
-/// Result from the declarative API.
-#[pyclass(name = "RefineResult")]
-#[derive(Clone)]
-pub struct PyRefineResult {
-    /// The final answer.
-    #[pyo3(get)]
-    pub answer: String,
-    /// Summary of the answer.
-    #[pyo3(get)]
-    pub summary: String,
-    /// Final quality score (0.0 - 1.0).
-    #[pyo3(get)]
-    pub score: f64,
-    /// Number of iterations taken.
-    #[pyo3(get)]
-    pub iterations: usize,
-    /// Whether result came from cache.
-    #[pyo3(get)]
-    pub from_cache: bool,
-    /// Domain used.
-    #[pyo3(get)]
-    pub domain: Option<String>,
-}
-
-#[pymethods]
-impl PyRefineResult {
-    fn __repr__(&self) -> String {
-        format!(
-            "RefineResult(score={:.3}, iterations={}, domain={:?})",
-            self.score, self.iterations, self.domain
-        )
-    }
-
-    fn __str__(&self) -> String {
-        self.answer.clone()
-    }
-}
-
 impl From<RefineResult> for PyRefineResult {
     fn from(r: RefineResult) -> Self {
         Self {
-            answer: r.answer,
-            summary: r.summary,
+            output: r.output,
             score: r.score,
             iterations: r.iterations,
             from_cache: r.from_cache,
-            domain: r.domain,
+            context_id: r.context_id.to_string(),
         }
     }
 }
 
-/// Result from a vector store search.
-#[pyclass(name = "VectorSearchResult")]
+/// Result from a memory search.
+#[pyclass(name = "Recall")]
 #[derive(Clone)]
-pub struct PyVectorSearchResult {
+pub struct PyRecall {
     /// Document identifier.
     #[pyo3(get)]
     pub id: String,
@@ -128,82 +73,82 @@ pub struct PyVectorSearchResult {
     pub content: String,
     /// Similarity score (0.0 - 1.0).
     #[pyo3(get)]
-    pub score: f32,
-    /// Optional metadata.
+    pub score: f64,
+    /// Optional tag.
     #[pyo3(get)]
-    pub metadata: Option<HashMap<String, String>>,
+    pub tag: Option<String>,
 }
 
 #[pymethods]
-impl PyVectorSearchResult {
+impl PyRecall {
     #[new]
-    fn new(id: String, content: String, score: f32) -> Self {
+    fn new(id: String, content: String, score: f64) -> Self {
         Self {
             id,
             content,
             score,
-            metadata: None,
+            tag: None,
         }
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "VectorSearchResult(id='{}', score={:.3})",
-            self.id, self.score
-        )
+        format!("Recall(id='{}', score={:.3})", self.id, self.score)
     }
 }
 
-impl From<VectorSearchResult> for PyVectorSearchResult {
-    fn from(r: VectorSearchResult) -> Self {
+impl From<Recall> for PyRecall {
+    fn from(r: Recall) -> Self {
         Self {
             id: r.id,
             content: r.content,
             score: r.score,
-            metadata: r.metadata,
+            tag: r.tag,
         }
     }
 }
 
-/// In-memory vector store for testing and small-scale use.
-#[pyclass(name = "InMemoryVectorStore")]
-pub struct PyInMemoryVectorStore {
-    inner: InMemoryVectorStore<HashEmbedder>,
+/// In-memory store for testing and small-scale use.
+#[pyclass(name = "Memory")]
+pub struct PyMemory {
+    inner: Memory,
 }
 
 #[pymethods]
-impl PyInMemoryVectorStore {
-    /// Create a new empty store with the given embedding dimension.
+impl PyMemory {
+    /// Create a new empty memory store.
     #[new]
-    #[pyo3(signature = (dimension=64))]
-    fn new(dimension: usize) -> Self {
-        Self {
-            inner: InMemoryVectorStore::new(HashEmbedder::new(dimension)),
-        }
+    fn new() -> Self {
+        Self { inner: memory() }
     }
 
     /// Add a document to the store.
-    fn add(&mut self, id: String, content: String) {
-        self.inner.add(id, content);
+    fn add(&mut self, content: String) -> String {
+        self.inner.add(&content)
     }
 
-    /// Add multiple documents.
-    fn add_batch(&mut self, docs: Vec<(String, String)>) {
-        self.inner.add_batch(docs);
+    /// Add a document with a specific ID.
+    fn add_with_id(&mut self, id: String, content: String) {
+        self.inner.add_with_id(id, &content);
     }
 
-    /// Clear all documents.
-    fn clear(&mut self) {
-        self.inner.clear();
+    /// Add a document with a tag.
+    fn add_tagged(&mut self, tag: String, content: String) -> String {
+        self.inner.add_tagged(&tag, &content)
     }
 
     /// Search by text query.
-    fn search(&self, query: &str, k: usize) -> Vec<PyVectorSearchResult> {
-        self.inner
-            .search_text(query, k)
-            .into_iter()
-            .map(|r| r.into())
-            .collect()
+    fn search(&self, query: &str, k: usize) -> Vec<PyRecall> {
+        self.inner.search(query, k).into_iter().map(|r| r.into()).collect()
+    }
+
+    /// Get a document by ID.
+    fn get(&self, id: &str) -> Option<String> {
+        self.inner.get(id)
+    }
+
+    /// Remove a document by ID.
+    fn remove(&mut self, id: &str) -> bool {
+        self.inner.remove(id)
     }
 
     /// Get the number of documents.
@@ -216,17 +161,22 @@ impl PyInMemoryVectorStore {
         self.inner.is_empty()
     }
 
-    /// Get embedding dimension.
-    #[getter]
-    fn dimension(&self) -> usize {
-        self.inner.dimension()
+    /// Get all tags in the store.
+    fn tags(&self) -> Vec<String> {
+        self.inner.tags()
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "InMemoryVectorStore(len={}, dimension={})",
-            self.inner.len(),
-            self.inner.dimension()
-        )
+        format!("Memory(len={})", self.inner.len())
+    }
+}
+
+impl PyMemory {
+    pub fn inner_ref(&self) -> &Memory {
+        &self.inner
+    }
+
+    pub fn inner_mut(&mut self) -> &mut Memory {
+        &mut self.inner
     }
 }

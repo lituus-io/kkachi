@@ -3,34 +3,37 @@
 // All Rights Reserved.
 // Licensed under PolyForm Noncommercial 1.0.0
 
-//! Python bindings for CLI validators (Cli and CliPipeline).
+//! Python bindings for CLI validators.
 
 use pyo3::prelude::*;
 
-use kkachi::recursive::{Cli, CliPipeline};
+use kkachi::recursive::{cli, Cli};
 
-/// A CLI command validator.
+/// A CLI command validator with fluent API.
 ///
 /// Example:
 /// ```python
-/// validator = Cli("rustfmt") \
+/// validator = CliValidator("rustfmt") \
 ///     .args(["--check"]) \
 ///     .weight(0.1) \
-///     .required()
+///     .required() \
+///     .then("rustc") \
+///     .args(["--emit=metadata"]) \
+///     .ext("rs")
 /// ```
-#[pyclass(name = "Cli")]
+#[pyclass(name = "CliValidator")]
 #[derive(Clone)]
-pub struct PyCli {
+pub struct PyCliValidator {
     inner: Cli,
 }
 
 #[pymethods]
-impl PyCli {
+impl PyCliValidator {
     /// Create a new CLI validator with the given command.
     #[new]
     fn new(command: String) -> Self {
         Self {
-            inner: Cli::new(&command),
+            inner: cli(&command),
         }
     }
 
@@ -43,13 +46,14 @@ impl PyCli {
 
     /// Add multiple arguments.
     fn args(&self, args: Vec<String>) -> Self {
+        let args_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         Self {
-            inner: self.inner.clone().args(args),
+            inner: self.inner.clone().args(&args_refs),
         }
     }
 
     /// Set the weight for this validator stage (0.0 to 1.0).
-    fn weight(&self, weight: f32) -> Self {
+    fn weight(&self, weight: f64) -> Self {
         Self {
             inner: self.inner.clone().weight(weight),
         }
@@ -62,17 +66,17 @@ impl PyCli {
         }
     }
 
-    /// Read input from stdin instead of temp file.
-    fn stdin(&self) -> Self {
+    /// Chain another command after this one.
+    fn then(&self, command: String) -> Self {
         Self {
-            inner: self.inner.clone().stdin(),
+            inner: self.inner.clone().then(&command),
         }
     }
 
     /// Set the file extension for temp files.
-    fn file_ext(&self, ext: String) -> Self {
+    fn ext(&self, ext: String) -> Self {
         Self {
-            inner: self.inner.clone().file_ext(&ext),
+            inner: self.inner.clone().ext(&ext),
         }
     }
 
@@ -84,70 +88,44 @@ impl PyCli {
     }
 
     /// Inherit an environment variable from the current process.
-    fn env_inherit(&self, key: String) -> Self {
+    fn env_from(&self, key: String) -> Self {
         Self {
-            inner: self.inner.clone().env_inherit(&key),
+            inner: self.inner.clone().env_from(&key),
+        }
+    }
+
+    /// Set the working directory for command execution.
+    fn workdir(&self, path: String) -> Self {
+        Self {
+            inner: self.inner.clone().workdir(&path),
+        }
+    }
+
+    /// Set the timeout in seconds.
+    fn timeout(&self, secs: u64) -> Self {
+        Self {
+            inner: self.inner.clone().timeout(secs),
+        }
+    }
+
+    /// Enable output capture.
+    fn capture(&self) -> Self {
+        Self {
+            inner: self.inner.clone().capture(),
         }
     }
 
     fn __repr__(&self) -> String {
-        "Cli(...)".to_string()
+        "CliValidator(...)".to_string()
     }
 }
 
-impl PyCli {
+impl PyCliValidator {
     pub fn into_inner(self) -> Cli {
         self.inner
     }
-}
 
-/// A pipeline of CLI validators with multiple stages.
-///
-/// Example:
-/// ```python
-/// pipeline = CliPipeline() \
-///     .stage("format", Cli("rustfmt").args(["--check"]).weight(0.1)) \
-///     .stage("compile", Cli("rustc").args(["--emit=metadata"]).required()) \
-///     .stage("lint", Cli("cargo").args(["clippy"]).weight(0.3)) \
-///     .file_ext("rs")
-/// ```
-#[pyclass(name = "CliPipeline")]
-#[derive(Clone)]
-pub struct PyCliPipeline {
-    inner: CliPipeline,
-}
-
-#[pymethods]
-impl PyCliPipeline {
-    /// Create a new empty CLI pipeline.
-    #[new]
-    fn new() -> Self {
-        Self {
-            inner: CliPipeline::new(),
-        }
-    }
-
-    /// Add a validation stage to the pipeline.
-    fn stage(&self, name: String, cli: PyCli) -> Self {
-        Self {
-            inner: self.inner.clone().stage(&name, cli.into_inner()),
-        }
-    }
-
-    /// Set the file extension for temp files used by all stages.
-    fn file_ext(&self, ext: String) -> Self {
-        Self {
-            inner: self.inner.clone().file_ext(&ext),
-        }
-    }
-
-    fn __repr__(&self) -> String {
-        "CliPipeline(...)".to_string()
-    }
-}
-
-impl PyCliPipeline {
-    pub fn into_inner(self) -> CliPipeline {
-        self.inner
+    pub fn inner_ref(&self) -> &Cli {
+        &self.inner
     }
 }

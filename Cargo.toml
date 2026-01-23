@@ -12,7 +12,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 authors = ["lituus-io <spicyzhug@gmail.com>"]
 license = "PolyForm-Noncommercial-1.0.0"
@@ -91,6 +91,10 @@ minijinja = { version = "2", features = ["loader"] }
 tiktoken-rs = "0.6"
 tokenizers = "0.21"
 text-splitter = { version = "0.18", default-features = false }
+
+# ONNX Runtime (for embeddings)
+ort = "2.0.0-rc.11"
+ndarray = "0.17"
 
 # REPL
 reedline = "0.28"
