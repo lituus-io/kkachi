@@ -2,7 +2,6 @@
 members = [
     "crates/kkachi",
     "crates/kkachi-cli",
-    "crates/kkachi-wasm",
     "crates/kkachi-python",
 ]
 resolver = "2"
@@ -105,11 +104,6 @@ crossterm = "0.28"
 # Tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# WASM
-wasm-bindgen = "0.2"
-wasm-bindgen-futures = "0.4"
-js-sys = "0.3"
 
 # Python
 pyo3 = { version = "0.22", features = ["extension-module"] }
