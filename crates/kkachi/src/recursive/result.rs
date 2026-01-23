@@ -16,11 +16,12 @@ use std::fmt;
 use std::time::Duration;
 
 /// Reason why the refinement loop stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StopReason {
     /// Target score was reached.
     TargetReached,
     /// Maximum iterations exceeded.
+    #[default]
     MaxIterations,
     /// Token budget was exhausted.
     BudgetExhausted,
@@ -32,12 +33,6 @@ pub enum StopReason {
     HumanAccepted,
     /// Human reviewer rejected and requested stop.
     HumanRejected,
-}
-
-impl Default for StopReason {
-    fn default() -> Self {
-        Self::MaxIterations
-    }
 }
 
 impl fmt::Display for StopReason {

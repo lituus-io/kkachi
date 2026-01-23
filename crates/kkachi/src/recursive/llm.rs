@@ -289,10 +289,7 @@ pub struct BoxedLlm<'a> {
 
 impl<'a> BoxedLlm<'a> {
     /// Create a new boxed LLM from any Llm implementation.
-    pub fn new<L: Llm + 'a>(llm: L) -> Self
-    where
-        L: 'static,
-    {
+    pub fn new<L: Llm + 'static>(llm: L) -> Self {
         let llm = std::sync::Arc::new(llm);
         let name = L::model_name(&*llm);
         // Note: We need to use a static name here

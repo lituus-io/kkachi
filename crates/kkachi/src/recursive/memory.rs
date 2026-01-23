@@ -396,8 +396,7 @@ pub fn mmr_select(
                 let mmr_score = lambda * relevance - (1.0 - lambda) * max_sim_to_selected;
                 (idx, *doc_id, mmr_score)
             })
-            .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(idx, doc_id, score)| (idx, doc_id, score));
+            .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
         if let Some((idx, doc_id, score)) = best_idx {
             selected.push((doc_id, score));
