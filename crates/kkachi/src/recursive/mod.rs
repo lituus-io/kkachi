@@ -86,24 +86,39 @@ pub use memory::{
 };
 
 // Feature-gated exports
-#[cfg(feature = "embeddings-onnx")]
-pub use memory::{OnnxEmbedder, OnnxEmbedderError};
 #[cfg(feature = "hnsw")]
 pub use memory::HnswIndex;
+#[cfg(feature = "embeddings-onnx")]
+pub use memory::{OnnxEmbedder, OnnxEmbedderError};
 pub use refine::{refine, Config, Refine};
-pub use result::{Compiled, ContextId, Correction, Example, Iteration, OptimizedPrompt, RefineResult, StopReason};
-pub use semantic::{semantic, SemanticBuilder, SemanticValidator};
+pub use result::{
+    Compiled, ContextId, Correction, Example, Iteration, OptimizedPrompt, RefineResult, StopReason,
+};
 pub use rewrite::{extract_all_code, extract_code, extract_section, rewrite, Rewrite};
-pub use validate::{AlwaysFail, BoolValidator, FnValidator, NoValidation, Score, ScoreValidator, Validate};
+pub use semantic::{semantic, SemanticBuilder, SemanticValidator};
+pub use validate::{
+    AlwaysFail, BoolValidator, FnValidator, NoValidation, Score, ScoreValidator, Validate,
+};
 
 // Template re-exports
-pub use template::{FormatSpec, FormatType, JsonSchema, PromptTone, Template, TemplateExample, TemplateOptions, ToneModifiers};
+pub use template::{
+    FormatSpec, FormatType, JsonSchema, PromptTone, Template, TemplateExample, TemplateOptions,
+    ToneModifiers,
+};
 
 // DSPy-style module re-exports
 pub use agent::{agent, Agent, AgentConfig, AgentResult, Step};
-pub use best_of::{best_of, BestOf, BestOfConfig, BestOfResult, CandidatePool, DefaultScorer, FnScorer, PoolStats, ScoredCandidate, Scorer};
-pub use ensemble::{ensemble, Aggregate, ChainResult, ConsensusPool, Ensemble, EnsembleConfig, EnsembleResult};
-pub use executor::{bash_executor, node_executor, python_executor, ruby_executor, CodeExecutor, ExecutionResult, ProcessExecutor};
+pub use best_of::{
+    best_of, BestOf, BestOfConfig, BestOfResult, CandidatePool, DefaultScorer, FnScorer, PoolStats,
+    ScoredCandidate, Scorer,
+};
+pub use ensemble::{
+    ensemble, Aggregate, ChainResult, ConsensusPool, Ensemble, EnsembleConfig, EnsembleResult,
+};
+pub use executor::{
+    bash_executor, node_executor, python_executor, ruby_executor, CodeExecutor, ExecutionResult,
+    ProcessExecutor,
+};
 pub use program::{program, Program, ProgramConfig, ProgramResult};
 pub use reason::{reason, Reason, ReasonConfig, ReasonResult};
 pub use tool::{tool, AsyncFnTool, FnTool, MockTool, Tool, ToolBuilder};

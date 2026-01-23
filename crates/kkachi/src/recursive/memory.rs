@@ -154,7 +154,13 @@ impl InMemoryStore {
         id
     }
 
-    fn add_with_id(&mut self, id: String, content: String, embedding: Vec<f32>, tag: Option<String>) {
+    fn add_with_id(
+        &mut self,
+        id: String,
+        content: String,
+        embedding: Vec<f32>,
+        tag: Option<String>,
+    ) {
         // Remove existing document with same ID
         self.documents.retain(|d| d.id != id);
         self.documents.push(Document {
@@ -877,8 +883,7 @@ impl<E: Embedder> Memory<E> {
             #[cfg(any(feature = "storage", feature = "storage-bundled"))]
             MemoryStore::Persistent { conn, .. } => {
                 let mut stmt = conn.prepare("SELECT COUNT(*) FROM documents").unwrap();
-                stmt.query_row([], |row| row.get::<_, i64>(0))
-                    .unwrap_or(0) as usize
+                stmt.query_row([], |row| row.get::<_, i64>(0)).unwrap_or(0) as usize
             }
         }
     }
@@ -895,7 +900,9 @@ impl<E: Embedder> Memory<E> {
             #[cfg(any(feature = "storage", feature = "storage-bundled"))]
             MemoryStore::Persistent { conn, .. } => {
                 let mut stmt = conn
-                    .prepare("SELECT DISTINCT tag FROM documents WHERE tag IS NOT NULL ORDER BY tag")
+                    .prepare(
+                        "SELECT DISTINCT tag FROM documents WHERE tag IS NOT NULL ORDER BY tag",
+                    )
                     .unwrap();
                 stmt.query_map([], |row| row.get(0))
                     .unwrap()
@@ -922,10 +929,7 @@ impl<E: Embedder> Memory<E> {
 // Helper functions for persistent storage
 #[cfg(any(feature = "storage", feature = "storage-bundled"))]
 fn embedding_to_bytes(embedding: &[f32]) -> Vec<u8> {
-    embedding
-        .iter()
-        .flat_map(|f| f.to_le_bytes())
-        .collect()
+    embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
 #[cfg(any(feature = "storage", feature = "storage-bundled"))]
@@ -1104,12 +1108,9 @@ impl OnnxEmbedder {
 
         // Create token_type_ids (all zeros for single sentence)
         let token_type_ids: Vec<i64> = vec![0; seq_len];
-        let token_type_ids_array =
-            ndarray::Array2::from_shape_vec((1, seq_len), token_type_ids).map_err(|e| {
-                OnnxEmbedderError::OrtError(format!(
-                    "Failed to create token_type_ids array: {}",
-                    e
-                ))
+        let token_type_ids_array = ndarray::Array2::from_shape_vec((1, seq_len), token_type_ids)
+            .map_err(|e| {
+                OnnxEmbedderError::OrtError(format!("Failed to create token_type_ids array: {}", e))
             })?;
 
         // Create ort Values from arrays
@@ -1121,19 +1122,35 @@ impl OnnxEmbedder {
             .map_err(|e| OnnxEmbedderError::OrtError(e.to_string()))?;
 
         // Lock the session for inference
-        let mut session = self.session.lock()
+        let mut session = self
+            .session
+            .lock()
             .map_err(|e| OnnxEmbedderError::OrtError(format!("Session lock poisoned: {}", e)))?;
 
         // Get output name before running inference
-        let output_name = session.outputs().first()
+        let output_name = session
+            .outputs()
+            .first()
             .map(|o| o.name().to_string())
             .ok_or_else(|| OnnxEmbedderError::OrtError("No output in model".to_string()))?;
 
         // Run inference using SessionInputs
-        let inputs: Vec<(std::borrow::Cow<'_, str>, ort::session::SessionInputValue<'_>)> = vec![
-            (std::borrow::Cow::Borrowed("input_ids"), input_ids_value.into()),
-            (std::borrow::Cow::Borrowed("attention_mask"), attention_mask_value.into()),
-            (std::borrow::Cow::Borrowed("token_type_ids"), token_type_ids_value.into()),
+        let inputs: Vec<(
+            std::borrow::Cow<'_, str>,
+            ort::session::SessionInputValue<'_>,
+        )> = vec![
+            (
+                std::borrow::Cow::Borrowed("input_ids"),
+                input_ids_value.into(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("attention_mask"),
+                attention_mask_value.into(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("token_type_ids"),
+                token_type_ids_value.into(),
+            ),
         ];
         let outputs = session
             .run(inputs)
@@ -1153,13 +1170,25 @@ impl OnnxEmbedder {
         let data: Vec<f32> = tensor_data.1.to_vec();
 
         // Mean pooling with attention mask
-        let embedding = Self::mean_pool_static(self.dimension, self.normalize, &shape, &data, &attention_mask);
+        let embedding = Self::mean_pool_static(
+            self.dimension,
+            self.normalize,
+            &shape,
+            &data,
+            &attention_mask,
+        );
 
         Ok(embedding)
     }
 
     /// Mean pooling of token embeddings with attention mask (static version).
-    fn mean_pool_static(dimension: usize, normalize: bool, shape: &[i64], data: &[f32], mask: &[i64]) -> Vec<f32> {
+    fn mean_pool_static(
+        dimension: usize,
+        normalize: bool,
+        shape: &[i64],
+        data: &[f32],
+        mask: &[i64],
+    ) -> Vec<f32> {
         // Shape is [batch, seq_len, hidden_size]
         if shape.len() != 3 {
             // Fallback: just take the first dimension elements
@@ -1203,7 +1232,6 @@ impl OnnxEmbedder {
 
         pooled
     }
-
 }
 
 #[cfg(feature = "embeddings-onnx")]
@@ -1315,8 +1343,8 @@ impl HnswIndex {
             vectors: Vec::new(),
             layers: Vec::new(),
             entry_point: None,
-            m: 16,           // Standard default
-            m0: 32,          // 2 * M
+            m: 16,  // Standard default
+            m0: 32, // 2 * M
             ml: 1.0 / (16.0_f64).ln(),
             ef_construction: 200,
             ef_search: 50,
@@ -1380,8 +1408,8 @@ impl HnswIndex {
         ef: usize,
         layer: usize,
     ) -> Vec<(usize, f64)> {
-        use std::collections::{BinaryHeap, HashSet};
         use std::cmp::Reverse;
+        use std::collections::{BinaryHeap, HashSet};
 
         let mut visited: HashSet<usize> = HashSet::new();
         let mut candidates: BinaryHeap<Reverse<(OrderedFloat, usize)>> = BinaryHeap::new();
@@ -1481,12 +1509,19 @@ impl HnswIndex {
                         let mut scored: Vec<_> = current_connections
                             .iter()
                             .filter_map(|&n| {
-                                self.vectors.get(n)
+                                self.vectors
+                                    .get(n)
                                     .map(|(_, e)| (n, cosine_similarity(&emb, e)))
                             })
                             .collect();
-                        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-                        self.layers[layer][neighbor] = scored.into_iter().take(max_connections).map(|(n, _)| n).collect();
+                        scored.sort_by(|a, b| {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        self.layers[layer][neighbor] = scored
+                            .into_iter()
+                            .take(max_connections)
+                            .map(|(n, _)| n)
+                            .collect();
                     }
                 }
             }
@@ -1512,7 +1547,9 @@ impl PartialOrd for OrderedFloat {
 #[cfg(feature = "hnsw")]
 impl Ord for OrderedFloat {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.partial_cmp(&other.0).unwrap_or(std::cmp::Ordering::Equal)
+        self.0
+            .partial_cmp(&other.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 
@@ -1605,9 +1642,7 @@ impl VectorIndex for HnswIndex {
         results.truncate(k);
         results
             .into_iter()
-            .filter_map(|(idx, score)| {
-                self.vectors.get(idx).map(|(id, _)| (*id, score))
-            })
+            .filter_map(|(idx, score)| self.vectors.get(idx).map(|(id, _)| (*id, score)))
             .collect()
     }
 

@@ -306,14 +306,14 @@ impl Cli {
 
         // Execute
         let output = if self.use_stdin {
-            let mut child = cmd.spawn().map_err(|e| {
-                Error::Other(format!("Failed to spawn '{}': {}", stage.command, e))
-            })?;
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| Error::Other(format!("Failed to spawn '{}': {}", stage.command, e)))?;
 
             if let Some(mut stdin) = child.stdin.take() {
-                stdin.write_all(content.as_bytes()).map_err(|e| {
-                    Error::Other(format!("Failed to write to stdin: {}", e))
-                })?;
+                stdin
+                    .write_all(content.as_bytes())
+                    .map_err(|e| Error::Other(format!("Failed to write to stdin: {}", e)))?;
             }
 
             child.wait_with_output().map_err(|e| {
@@ -329,11 +329,7 @@ impl Cli {
 
         Ok(CliCapture {
             stage: stage.command.clone(),
-            command: format!(
-                "{} {}",
-                stage.command,
-                stage.args.join(" ")
-            ),
+            command: format!("{} {}", stage.command, stage.args.join(" ")),
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             success: output.status.success(),
@@ -552,10 +548,7 @@ mod tests {
 
     #[test]
     fn test_cli_builder() {
-        let c = cli("echo")
-            .arg("hello")
-            .arg("world")
-            .ext("txt");
+        let c = cli("echo").arg("hello").arg("world").ext("txt");
 
         assert_eq!(c.stages.len(), 1);
         assert_eq!(c.stages[0].command, "echo");
@@ -579,9 +572,7 @@ mod tests {
 
     #[test]
     fn test_cli_env() {
-        let c = cli("echo")
-            .env("FOO", "bar")
-            .env_from("PATH");
+        let c = cli("echo").env("FOO", "bar").env_from("PATH");
 
         assert_eq!(c.env_vars.len(), 1);
         assert_eq!(c.env_passthrough.len(), 1);
@@ -646,8 +637,7 @@ mod tests {
 
     #[test]
     fn test_cli_weighted_stages() {
-        let c = cli("true").weight(0.3)
-            .then("true").weight(0.7);
+        let c = cli("true").weight(0.3).then("true").weight(0.7);
 
         let score = c.validate("test");
         assert!(score.is_perfect());

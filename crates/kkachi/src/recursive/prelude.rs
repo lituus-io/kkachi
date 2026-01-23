@@ -31,15 +31,13 @@ pub use crate::recursive::memory::{
 };
 
 // Feature-gated exports
-#[cfg(feature = "embeddings-onnx")]
-pub use crate::recursive::memory::{OnnxEmbedder, OnnxEmbedderError};
 #[cfg(feature = "hnsw")]
 pub use crate::recursive::memory::HnswIndex;
+#[cfg(feature = "embeddings-onnx")]
+pub use crate::recursive::memory::{OnnxEmbedder, OnnxEmbedderError};
 
 // LLM
-pub use crate::recursive::llm::{
-    BoxedLlm, FailingLlm, IterativeMockLlm, Llm, LmOutput, MockLlm,
-};
+pub use crate::recursive::llm::{BoxedLlm, FailingLlm, IterativeMockLlm, Llm, LmOutput, MockLlm};
 
 // Results
 pub use crate::recursive::result::{
@@ -55,10 +53,12 @@ pub use crate::recursive::rewrite::{
 };
 
 // DSPy-style patterns
-pub use crate::recursive::tool::{tool, Tool, MockTool};
-pub use crate::recursive::executor::{CodeExecutor, ExecutionResult, python_executor, node_executor, bash_executor};
-pub use crate::recursive::reason::{reason, ReasonResult};
-pub use crate::recursive::best_of::{best_of, Scorer, CandidatePool, ScoredCandidate, PoolStats};
-pub use crate::recursive::ensemble::{ensemble, Aggregate, ConsensusPool, ChainResult};
 pub use crate::recursive::agent::{agent, AgentResult, Step};
+pub use crate::recursive::best_of::{best_of, CandidatePool, PoolStats, ScoredCandidate, Scorer};
+pub use crate::recursive::ensemble::{ensemble, Aggregate, ChainResult, ConsensusPool};
+pub use crate::recursive::executor::{
+    bash_executor, node_executor, python_executor, CodeExecutor, ExecutionResult,
+};
 pub use crate::recursive::program::{program, ProgramResult};
+pub use crate::recursive::reason::{reason, ReasonResult};
+pub use crate::recursive::tool::{tool, MockTool, Tool};

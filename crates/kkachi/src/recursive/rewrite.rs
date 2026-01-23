@@ -184,8 +184,7 @@ impl<'a> Rewrite<'a> {
     /// If the section exists, its content is replaced.
     /// If it doesn't exist, it's appended to the document.
     pub fn section(mut self, title: &'a str, content: &'a str) -> Self {
-        self.operations
-            .push(Operation::Section { title, content });
+        self.operations.push(Operation::Section { title, content });
         self
     }
 
@@ -230,7 +229,9 @@ impl<'a> Rewrite<'a> {
                 Operation::ReplaceCode { lang, content } => {
                     replace_code_block(&result, lang, content)
                 }
-                Operation::Section { title, content } => replace_or_append_section(&result, title, content),
+                Operation::Section { title, content } => {
+                    replace_or_append_section(&result, title, content)
+                }
                 Operation::SectionAfter {
                     after,
                     title,

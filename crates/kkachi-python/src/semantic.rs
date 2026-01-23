@@ -149,11 +149,8 @@ impl Validate for OwnedSemanticValidator {
 
         match result {
             Ok(output) => self.parse_judgment(&output),
-            Err(e) => Score::with_feedback(
-                0.5,
-                format!("Semantic validation error: {}", e),
-            )
-            .with_confidence(0.0),
+            Err(e) => Score::with_feedback(0.5, format!("Semantic validation error: {}", e))
+                .with_confidence(0.0),
         }
     }
 

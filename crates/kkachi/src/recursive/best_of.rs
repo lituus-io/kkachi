@@ -38,7 +38,11 @@ use smallvec::SmallVec;
 ///     .validate(checks().require("fn "))
 ///     .go();
 /// ```
-pub fn best_of<'a, L: Llm>(llm: &'a L, prompt: &'a str, n: usize) -> BestOf<'a, L, NoValidation, DefaultScorer> {
+pub fn best_of<'a, L: Llm>(
+    llm: &'a L,
+    prompt: &'a str,
+    n: usize,
+) -> BestOf<'a, L, NoValidation, DefaultScorer> {
     BestOf::new(llm, prompt, n)
 }
 
@@ -137,7 +141,10 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
     ///
     /// The scorer evaluates each candidate and returns a score between
     /// 0.0 and 1.0.
-    pub fn score_with<F: Fn(&str) -> f64 + Send + Sync>(self, f: F) -> BestOf<'a, L, V, FnScorer<F>> {
+    pub fn score_with<F: Fn(&str) -> f64 + Send + Sync>(
+        self,
+        f: F,
+    ) -> BestOf<'a, L, V, FnScorer<F>> {
         BestOf {
             llm: self.llm,
             prompt: self.prompt,
@@ -401,8 +408,8 @@ pub struct PoolStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recursive::llm::MockLlm;
     use crate::recursive::checks::checks;
+    use crate::recursive::llm::MockLlm;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
@@ -487,8 +494,7 @@ mod tests {
     fn test_scorer_weight() {
         let llm = MockLlm::new(|_, _| "test".to_string());
 
-        let builder = best_of(&llm, "test", 1)
-            .scorer_weight(0.8);
+        let builder = best_of(&llm, "test", 1).scorer_weight(0.8);
 
         assert!((builder.config.scorer_weight - 0.8).abs() < f64::EPSILON);
         assert!((builder.config.validator_weight - 0.2).abs() < f64::EPSILON);

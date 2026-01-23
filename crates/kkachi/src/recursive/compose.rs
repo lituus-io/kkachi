@@ -314,6 +314,8 @@ mod tests {
         let combined = v1.and(v2).and(v3);
 
         assert!(combined.validate("fn foo() -> i32 {}").is_perfect());
-        assert!(!combined.validate("fn foo() -> i32 { x.unwrap() }").is_perfect());
+        assert!(!combined
+            .validate("fn foo() -> i32 { x.unwrap() }")
+            .is_perfect());
     }
 }

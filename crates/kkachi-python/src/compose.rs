@@ -10,13 +10,10 @@
 //! The `ValidatorNode` enum stores validator configurations as a tree,
 //! materialized into `Box<dyn Validate>` at execution time.
 
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 
-use kkachi::recursive::{
-    Checks, Validate, Score,
-    And, Or, All, Any,
-};
+use kkachi::recursive::{All, And, Any, Checks, Or, Score, Validate};
 
 // ============================================================================
 // DynValidator — Bridge type for dynamic dispatch at the Python boundary
@@ -236,10 +233,7 @@ impl PyValidator {
     fn and_compose(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         let other_node = extract_validator_node(other)?;
         Ok(Self {
-            node: ValidatorNode::And(
-                Box::new(self.node.clone()),
-                Box::new(other_node),
-            ),
+            node: ValidatorNode::And(Box::new(self.node.clone()), Box::new(other_node)),
         })
     }
 
@@ -248,10 +242,7 @@ impl PyValidator {
     fn or_compose(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         let other_node = extract_validator_node(other)?;
         Ok(Self {
-            node: ValidatorNode::Or(
-                Box::new(self.node.clone()),
-                Box::new(other_node),
-            ),
+            node: ValidatorNode::Or(Box::new(self.node.clone()), Box::new(other_node)),
         })
     }
 

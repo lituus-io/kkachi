@@ -485,17 +485,16 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
             }
 
             // Extract code from markdown if configured
-            let text_to_validate = if let (Some(_md), Some(lang)) =
-                (self.source_markdown, self.source_lang)
-            {
-                // Replace code in markdown and extract
-                let full_output = format!("```{}\n{}\n```", lang, output);
-                extract_code(&full_output, lang)
-                    .map(|s| s.to_string())
-                    .unwrap_or(output.clone())
-            } else {
-                output.clone()
-            };
+            let text_to_validate =
+                if let (Some(_md), Some(lang)) = (self.source_markdown, self.source_lang) {
+                    // Replace code in markdown and extract
+                    let full_output = format!("```{}\n{}\n```", lang, output);
+                    extract_code(&full_output, lang)
+                        .map(|s| s.to_string())
+                        .unwrap_or(output.clone())
+                } else {
+                    output.clone()
+                };
 
             // Validate
             let score = self.validator.validate(&text_to_validate);
@@ -985,10 +984,7 @@ mod tests {
     fn test_result_has_elapsed() {
         let llm = MockLlm::new(|_, _| "output".to_string());
 
-        let result = refine(&llm, "test")
-            .max_iter(1)
-            .go_full()
-            .unwrap();
+        let result = refine(&llm, "test").max_iter(1).go_full().unwrap();
 
         // Elapsed should be non-zero (or at least not negative)
         assert!(result.elapsed >= Duration::ZERO);
@@ -998,10 +994,7 @@ mod tests {
     fn test_result_has_confidence() {
         let llm = MockLlm::new(|_, _| "output".to_string());
 
-        let result = refine(&llm, "test")
-            .max_iter(1)
-            .go_full()
-            .unwrap();
+        let result = refine(&llm, "test").max_iter(1).go_full().unwrap();
 
         // Default confidence is 1.0 for deterministic validators
         assert!((result.confidence - 1.0).abs() < f64::EPSILON);

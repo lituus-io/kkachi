@@ -420,7 +420,11 @@ mod tests {
 
     #[test]
     fn test_weight_modifier() {
-        let v = checks().require("fn ").weight(2.0).require("->").weight(1.0);
+        let v = checks()
+            .require("fn ")
+            .weight(2.0)
+            .require("->")
+            .weight(1.0);
 
         // fn passes (2.0), -> fails (0) -> 2.0/3.0
         let score = v.validate("fn foo() {}");
@@ -462,14 +466,9 @@ mod tests {
 
     #[test]
     fn test_feedback_modifier() {
-        let v = checks()
-            .require("fn ")
-            .feedback("Missing function keyword");
+        let v = checks().require("fn ").feedback("Missing function keyword");
 
         let score = v.validate("let x = 1");
-        assert_eq!(
-            score.feedback_str(),
-            Some("Missing function keyword")
-        );
+        assert_eq!(score.feedback_str(), Some("Missing function keyword"));
     }
 }

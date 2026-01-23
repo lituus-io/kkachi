@@ -357,7 +357,11 @@ impl RefineResult {
 
         let mut md = String::from("## Corrections Made\n\n");
         for (i, correction) in self.corrections.iter().enumerate() {
-            md.push_str(&format!("### Correction {} (Iteration {})\n\n", i + 1, correction.iteration));
+            md.push_str(&format!(
+                "### Correction {} (Iteration {})\n\n",
+                i + 1,
+                correction.iteration
+            ));
             md.push_str(&format!("**Error:** {}\n\n", correction.error));
             md.push_str(&format!("**Resolution:** {}\n\n", correction.resolution));
         }
@@ -391,7 +395,11 @@ impl fmt::Display for RefineResult {
         writeln!(f, "  context_id: {}", self.context_id)?;
         writeln!(f, "  from_cache: {}", self.from_cache)?;
         writeln!(f, "  corrections: {}", self.corrections.len())?;
-        writeln!(f, "  output: {}...", &self.output[..self.output.len().min(50)])?;
+        writeln!(
+            f,
+            "  output: {}...",
+            &self.output[..self.output.len().min(50)]
+        )?;
         write!(f, "}}")
     }
 }

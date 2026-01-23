@@ -160,7 +160,11 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
             iterations = iter + 1;
 
             // Build the prompt with CoT instruction
-            let cot_prompt = self.build_prompt(if iter == 0 { None } else { last_score.feedback_str() });
+            let cot_prompt = self.build_prompt(if iter == 0 {
+                None
+            } else {
+                last_score.feedback_str()
+            });
 
             // Call the LLM
             let output = match self.llm.generate(&cot_prompt, "", None).await {
@@ -210,7 +214,10 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
 
     /// Build the Chain of Thought prompt.
     fn build_prompt(&self, feedback: Option<&str>) -> String {
-        let instruction = self.config.instruction.unwrap_or("Let's think step by step.");
+        let instruction = self
+            .config
+            .instruction
+            .unwrap_or("Let's think step by step.");
 
         let mut prompt = format!("{}\n\n{}", self.prompt, instruction);
 
@@ -228,7 +235,13 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
     /// Parse the response to extract reasoning and final answer.
     fn parse_response<'b>(&self, response: &'b str) -> (Option<&'b str>, String) {
         // Look for common answer markers
-        let answer_markers = ["Therefore:", "Answer:", "Final Answer:", "So the answer is:", "Result:"];
+        let answer_markers = [
+            "Therefore:",
+            "Answer:",
+            "Final Answer:",
+            "So the answer is:",
+            "Result:",
+        ];
 
         for marker in &answer_markers {
             if let Some(idx) = response.find(marker) {
@@ -241,7 +254,11 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
                 let answer = answer[..answer_end].trim().to_string();
 
                 return (
-                    if reasoning.is_empty() { None } else { Some(reasoning) },
+                    if reasoning.is_empty() {
+                        None
+                    } else {
+                        Some(reasoning)
+                    },
                     answer,
                 );
             }
@@ -253,7 +270,11 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
             let reasoning = response[..last_line_start].trim();
             let answer = response[last_line_start..].trim().to_string();
             (
-                if reasoning.is_empty() { None } else { Some(reasoning) },
+                if reasoning.is_empty() {
+                    None
+                } else {
+                    Some(reasoning)
+                },
                 answer,
             )
         } else {
@@ -303,8 +324,8 @@ impl ReasonResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recursive::llm::MockLlm;
     use crate::recursive::checks::checks;
+    use crate::recursive::llm::MockLlm;
 
     #[test]
     fn test_reason_basic() {
@@ -312,7 +333,8 @@ mod tests {
             "Step 1: Calculate 25 * 30 = 750\n\
              Step 2: Calculate 25 * 7 = 175\n\
              Step 3: Add them: 750 + 175 = 925\n\n\
-             Therefore: 925".to_string()
+             Therefore: 925"
+                .to_string()
         });
 
         let result = reason(&llm, "What is 25 * 37?").go();
@@ -324,9 +346,7 @@ mod tests {
 
     #[test]
     fn test_reason_with_validation() {
-        let llm = MockLlm::new(|_, _| {
-            "Let me think...\n\nAnswer: 42".to_string()
-        });
+        let llm = MockLlm::new(|_, _| "Let me think...\n\nAnswer: 42".to_string());
 
         let result = reason(&llm, "Calculate something")
             .validate(checks().regex(r"\d+"))
@@ -343,16 +363,15 @@ mod tests {
 
         // Test "Therefore:" marker
         let (reasoning, answer) = builder.parse_response(
-            "First, I'll analyze the problem.\nThen, I'll solve it.\nTherefore: 42"
+            "First, I'll analyze the problem.\nThen, I'll solve it.\nTherefore: 42",
         );
         assert!(reasoning.is_some());
         assert!(reasoning.unwrap().contains("analyze"));
         assert_eq!(answer, "42");
 
         // Test "Answer:" marker
-        let (reasoning, answer) = builder.parse_response(
-            "Step 1: Do X\nStep 2: Do Y\nAnswer: The result is Z"
-        );
+        let (reasoning, answer) =
+            builder.parse_response("Step 1: Do X\nStep 2: Do Y\nAnswer: The result is Z");
         assert!(reasoning.is_some());
         assert_eq!(answer, "The result is Z");
     }
@@ -376,13 +395,9 @@ mod tests {
 
     #[test]
     fn test_reason_no_reasoning() {
-        let llm = MockLlm::new(|_, _| {
-            "Reasoning here\nAnswer: 42".to_string()
-        });
+        let llm = MockLlm::new(|_, _| "Reasoning here\nAnswer: 42".to_string());
 
-        let result = reason(&llm, "Test")
-            .no_reasoning()
-            .go();
+        let result = reason(&llm, "Test").no_reasoning().go();
 
         assert!(result.reasoning.is_none());
         assert_eq!(result.output, "42");

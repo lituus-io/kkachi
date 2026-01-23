@@ -138,7 +138,11 @@ impl PyMemory {
 
     /// Search by text query.
     fn search(&self, query: &str, k: usize) -> Vec<PyRecall> {
-        self.inner.search(query, k).into_iter().map(|r| r.into()).collect()
+        self.inner
+            .search(query, k)
+            .into_iter()
+            .map(|r| r.into())
+            .collect()
     }
 
     /// Get a document by ID.

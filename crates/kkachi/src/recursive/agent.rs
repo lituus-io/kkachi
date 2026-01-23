@@ -177,15 +177,17 @@ impl<'a, L: Llm> Agent<'a, L> {
                         error: None,
                     };
                 }
-                ParsedResponse::Action { thought, action, input } => {
+                ParsedResponse::Action {
+                    thought,
+                    action,
+                    input,
+                } => {
                     // Find and execute the tool
                     let observation = match self.find_tool(&action) {
-                        Some(tool) => {
-                            match tool.execute(&input).await {
-                                Ok(result) => result,
-                                Err(e) => format!("Tool error: {}", e),
-                            }
-                        }
+                        Some(tool) => match tool.execute(&input).await {
+                            Ok(result) => result,
+                            Err(e) => format!("Tool error: {}", e),
+                        },
                         None => format!("Unknown tool: {}", action),
                     };
 
@@ -258,7 +260,7 @@ impl<'a, L: Llm> Agent<'a, L> {
              Observation: tool output\n\
              ... (repeat as needed)\n\
              Thought: I now know the final answer\n\
-             Final Answer: your answer\n\n"
+             Final Answer: your answer\n\n",
         );
 
         // Add trajectory
@@ -311,7 +313,11 @@ impl<'a, L: Llm> Agent<'a, L> {
                 let input_end = input_text.find('\n').unwrap_or(input_text.len());
                 let input = input_text[..input_end].trim().to_string();
 
-                return ParsedResponse::Action { thought, action, input };
+                return ParsedResponse::Action {
+                    thought,
+                    action,
+                    input,
+                };
             } else {
                 return ParsedResponse::Action {
                     thought,
@@ -395,9 +401,8 @@ mod tests {
 
     #[test]
     fn test_agent_direct_answer() {
-        let llm = MockLlm::new(|_, _| {
-            "I know the answer immediately.\nFinal Answer: 42".to_string()
-        });
+        let llm =
+            MockLlm::new(|_, _| "I know the answer immediately.\nFinal Answer: 42".to_string());
 
         let result = agent(&llm, "What is the answer?").go();
 
@@ -414,14 +419,14 @@ mod tests {
         let llm = MockLlm::new(move |_, _| {
             let n = counter.fetch_add(1, Ordering::SeqCst);
             match n {
-                0 => "I need to calculate.\nAction: calculator\nAction Input: 2 + 2 * 2".to_string(),
+                0 => {
+                    "I need to calculate.\nAction: calculator\nAction Input: 2 + 2 * 2".to_string()
+                }
                 _ => "Now I know.\nFinal Answer: 8".to_string(),
             }
         });
 
-        let result = agent(&llm, "Calculate 2 + 2 * 2")
-            .tool(&calc)
-            .go();
+        let result = agent(&llm, "Calculate 2 + 2 * 2").tool(&calc).go();
 
         assert!(result.success);
         assert_eq!(result.output, "8");
@@ -440,9 +445,7 @@ mod tests {
             }
         });
 
-        let result = agent(&llm, "Test")
-            .max_steps(3)
-            .go();
+        let result = agent(&llm, "Test").max_steps(3).go();
 
         assert!(result.success);
         assert!(result.trajectory[0].observation.contains("Unknown tool"));
@@ -450,13 +453,10 @@ mod tests {
 
     #[test]
     fn test_agent_max_steps() {
-        let llm = MockLlm::new(|_, _| {
-            "Still thinking.\nAction: think\nAction Input: more".to_string()
-        });
+        let llm =
+            MockLlm::new(|_, _| "Still thinking.\nAction: think\nAction Input: more".to_string());
 
-        let result = agent(&llm, "Never ends")
-            .max_steps(3)
-            .go();
+        let result = agent(&llm, "Never ends").max_steps(3).go();
 
         assert!(!result.success);
         assert_eq!(result.steps, 3);
@@ -497,9 +497,7 @@ mod tests {
     fn test_agent_no_trajectory() {
         let llm = MockLlm::new(|_, _| "Final Answer: 42".to_string());
 
-        let result = agent(&llm, "Answer")
-            .no_trajectory()
-            .go();
+        let result = agent(&llm, "Answer").no_trajectory().go();
 
         assert!(result.success);
         assert!(result.trajectory.is_empty());
@@ -518,7 +516,11 @@ mod tests {
 
         // Test action parsing
         match builder.parse_response("Need to search.\nAction: search\nAction Input: query") {
-            ParsedResponse::Action { thought, action, input } => {
+            ParsedResponse::Action {
+                thought,
+                action,
+                input,
+            } => {
                 assert!(thought.contains("search"));
                 assert_eq!(action, "search");
                 assert_eq!(input, "query");

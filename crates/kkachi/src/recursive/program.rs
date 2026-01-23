@@ -335,13 +335,9 @@ mod tests {
 
     #[test]
     fn test_program_basic() {
-        let llm = MockLlm::new(|_, _| {
-            "Here's the code:\n```bash\necho 42\n```".to_string()
-        });
+        let llm = MockLlm::new(|_, _| "Here's the code:\n```bash\necho 42\n```".to_string());
 
-        let result = program(&llm, "Print 42")
-            .executor(bash_executor())
-            .go();
+        let result = program(&llm, "Print 42").executor(bash_executor()).go();
 
         assert!(result.success);
         assert!(result.output.contains("42"));
@@ -365,15 +361,12 @@ mod tests {
         let builder = program(&llm, "test");
 
         // Test with language-specific code block
-        let code = builder.extract_code(
-            "Here's the solution:\n```python\nprint('hello')\n```\nDone!"
-        );
+        let code =
+            builder.extract_code("Here's the solution:\n```python\nprint('hello')\n```\nDone!");
         assert_eq!(code, "print('hello')\n");
 
         // Test with generic code block
-        let code = builder.extract_code(
-            "```\necho test\n```"
-        );
+        let code = builder.extract_code("```\necho test\n```");
         assert_eq!(code, "echo test\n");
 
         // Test without code block
@@ -389,7 +382,7 @@ mod tests {
         let llm = MockLlm::new(move |_prompt, _| {
             let n = counter.fetch_add(1, Ordering::SeqCst);
             match n {
-                0 => "```bash\nexit 1\n```".to_string(), // Fails
+                0 => "```bash\nexit 1\n```".to_string(),       // Fails
                 _ => "```bash\necho success\n```".to_string(), // Succeeds
             }
         });
@@ -420,9 +413,7 @@ mod tests {
     fn test_program_config() {
         let llm = MockLlm::new(|_, _| String::new());
 
-        let builder = program(&llm, "test")
-            .max_attempts(5)
-            .language("python");
+        let builder = program(&llm, "test").max_attempts(5).language("python");
 
         assert_eq!(builder.config.max_attempts, 5);
         assert_eq!(builder.config.language, "python");

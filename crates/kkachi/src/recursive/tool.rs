@@ -36,7 +36,10 @@ pub trait Tool: Send + Sync {
     /// Execute the tool with the given input.
     ///
     /// Returns a boxed future to maintain object safety.
-    fn execute<'a>(&'a self, input: &'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
+    fn execute<'a>(
+        &'a self,
+        input: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
 }
 
 /// Builder for creating tools from closures.
@@ -124,7 +127,10 @@ where
         self.description
     }
 
-    fn execute<'a>(&'a self, input: &'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+    fn execute<'a>(
+        &'a self,
+        input: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
         let result = (self.executor)(input);
         Box::pin(std::future::ready(result))
     }
@@ -150,7 +156,10 @@ where
         self.description
     }
 
-    fn execute<'a>(&'a self, input: &'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+    fn execute<'a>(
+        &'a self,
+        input: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
         let input_owned = input.to_owned();
         let fut = (self.executor)(input_owned);
         Box::pin(fut)
@@ -184,7 +193,10 @@ impl Tool for MockTool {
         self.description
     }
 
-    fn execute<'a>(&'a self, _input: &'a str) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+    fn execute<'a>(
+        &'a self,
+        _input: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
         Box::pin(std::future::ready(Ok(self.response.to_string())))
     }
 }

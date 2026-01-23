@@ -7,12 +7,10 @@
 //! Provides structured prompt engineering with format specs, tone control,
 //! few-shot examples, and output validation.
 
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 
-use kkachi::recursive::{
-    FormatType, PromptTone, Template, TemplateExample,
-};
+use kkachi::recursive::{FormatType, PromptTone, Template, TemplateExample};
 
 // ============================================================================
 // PyFormatType — Output format enum
@@ -235,7 +233,8 @@ impl PyTemplate {
         iteration: u32,
         feedback: Option<String>,
     ) -> String {
-        self.inner.assemble_prompt(&question, iteration, feedback.as_deref())
+        self.inner
+            .assemble_prompt(&question, iteration, feedback.as_deref())
     }
 
     /// Validate output against the format specification.
@@ -249,10 +248,8 @@ impl PyTemplate {
 
     /// Parse JSON output into a Python dict.
     fn parse_json(&self, output: String, py: Python<'_>) -> PyResult<PyObject> {
-        let value: serde_json::Value = serde_json::from_str(
-            extract_json_content(&output),
-        )
-        .map_err(|e| PyRuntimeError::new_err(format!("JSON parse error: {}", e)))?;
+        let value: serde_json::Value = serde_json::from_str(extract_json_content(&output))
+            .map_err(|e| PyRuntimeError::new_err(format!("JSON parse error: {}", e)))?;
 
         json_to_pyobject(py, &value)
     }
@@ -277,9 +274,7 @@ impl PyTemplate {
     fn __repr__(&self) -> String {
         format!(
             "Template(name='{}', format={:?}, tone={:?})",
-            self.inner.name,
-            self.inner.format.format_type,
-            self.inner.options.tone,
+            self.inner.name, self.inner.format.format_type, self.inner.options.tone,
         )
     }
 }

@@ -139,7 +139,8 @@ impl<F> Llm for MockLlm<F>
 where
     F: Fn(&str, Option<&str>) -> String + Send + Sync,
 {
-    type GenerateFut<'a> = std::future::Ready<Result<LmOutput>>
+    type GenerateFut<'a>
+        = std::future::Ready<Result<LmOutput>>
     where
         Self: 'a;
 
@@ -195,8 +196,7 @@ where
 
     /// Reset the iteration counter.
     pub fn reset(&self) {
-        self.iteration
-            .store(0, std::sync::atomic::Ordering::SeqCst);
+        self.iteration.store(0, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Get the current iteration count.
@@ -209,7 +209,8 @@ impl<F> Llm for IterativeMockLlm<F>
 where
     F: Fn(u32, &str, Option<&str>) -> String + Send + Sync,
 {
-    type GenerateFut<'a> = std::future::Ready<Result<LmOutput>>
+    type GenerateFut<'a>
+        = std::future::Ready<Result<LmOutput>>
     where
         Self: 'a;
 
@@ -249,7 +250,8 @@ impl FailingLlm {
 }
 
 impl Llm for FailingLlm {
-    type GenerateFut<'a> = std::future::Ready<Result<LmOutput>>
+    type GenerateFut<'a>
+        = std::future::Ready<Result<LmOutput>>
     where
         Self: 'a;
 
@@ -273,7 +275,11 @@ impl Llm for FailingLlm {
 /// boxing the future. Use this only when you need runtime polymorphism.
 pub struct BoxedLlm<'a> {
     generate_fn: Box<
-        dyn Fn(&str, &str, Option<&str>) -> Pin<Box<dyn Future<Output = Result<LmOutput>> + Send + 'static>>
+        dyn Fn(
+                &str,
+                &str,
+                Option<&str>,
+            ) -> Pin<Box<dyn Future<Output = Result<LmOutput>> + Send + 'static>>
             + Send
             + Sync
             + 'a,
@@ -297,9 +303,7 @@ impl<'a> BoxedLlm<'a> {
                 let prompt = prompt.to_owned();
                 let context = context.to_owned();
                 let feedback = feedback.map(|s| s.to_owned());
-                Box::pin(async move {
-                    llm.generate(&prompt, &context, feedback.as_deref()).await
-                })
+                Box::pin(async move { llm.generate(&prompt, &context, feedback.as_deref()).await })
             }),
             name: static_name,
         }
@@ -307,7 +311,8 @@ impl<'a> BoxedLlm<'a> {
 }
 
 impl Llm for BoxedLlm<'_> {
-    type GenerateFut<'b> = Pin<Box<dyn Future<Output = Result<LmOutput>> + Send + 'b>>
+    type GenerateFut<'b>
+        = Pin<Box<dyn Future<Output = Result<LmOutput>> + Send + 'b>>
     where
         Self: 'b;
 
@@ -343,11 +348,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_llm_with_feedback() {
-        let llm = MockLlm::new(|prompt, feedback| {
-            match feedback {
-                Some(fb) => format!("Improved: {} (feedback: {})", prompt, fb),
-                None => format!("Initial: {}", prompt),
-            }
+        let llm = MockLlm::new(|prompt, feedback| match feedback {
+            Some(fb) => format!("Improved: {} (feedback: {})", prompt, fb),
+            None => format!("Initial: {}", prompt),
         });
 
         let output = llm.generate("test", "", None).await.unwrap();
@@ -360,12 +363,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_iterative_mock_llm() {
-        let llm = IterativeMockLlm::new(|iter, _prompt, _| {
-            match iter {
-                0 => "first try".to_string(),
-                1 => "second try".to_string(),
-                _ => "final answer".to_string(),
-            }
+        let llm = IterativeMockLlm::new(|iter, _prompt, _| match iter {
+            0 => "first try".to_string(),
+            1 => "second try".to_string(),
+            _ => "final answer".to_string(),
         });
 
         let out1 = llm.generate("test", "", None).await.unwrap();
@@ -384,7 +385,10 @@ mod tests {
 
         let result = llm.generate("test", "", None).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("intentional failure"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("intentional failure"));
     }
 
     #[test]

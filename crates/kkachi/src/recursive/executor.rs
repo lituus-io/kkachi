@@ -89,7 +89,10 @@ pub trait CodeExecutor: Send + Sync {
     /// Execute the given code.
     ///
     /// Returns a boxed future to maintain object safety.
-    fn execute<'a>(&'a self, code: &'a str) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send + 'a>>;
+    fn execute<'a>(
+        &'a self,
+        code: &'a str,
+    ) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send + 'a>>;
 }
 
 /// CLI-based code executor that runs code via external process.
@@ -162,8 +165,12 @@ impl ProcessExecutor {
         let temp_file = if !self.use_stdin {
             let temp_dir = std::env::temp_dir();
             let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
-            let file_path = temp_dir.join(format!("kkachi_exec_{}_{}.{}",
-                std::process::id(), unique_id, self.extension));
+            let file_path = temp_dir.join(format!(
+                "kkachi_exec_{}_{}.{}",
+                std::process::id(),
+                unique_id,
+                self.extension
+            ));
 
             if let Err(e) = std::fs::write(&file_path, code) {
                 return ExecutionResult {
@@ -280,7 +287,10 @@ impl CodeExecutor for ProcessExecutor {
         self.extension
     }
 
-    fn execute<'a>(&'a self, code: &'a str) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send + 'a>> {
+    fn execute<'a>(
+        &'a self,
+        code: &'a str,
+    ) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send + 'a>> {
         Box::pin(std::future::ready(self.execute_sync(code)))
     }
 }
@@ -325,8 +335,11 @@ pub fn bash_executor() -> ProcessExecutor {
 pub fn rust_executor() -> ProcessExecutor {
     // For Rust, we'll use rustc and run the resulting binary
     // This is simplified - a real implementation might use cargo
-    ProcessExecutor::new("rustc", "rs", "rust")
-        .args(&["-o", "/tmp/kkachi_rust_exec", "--edition=2021"])
+    ProcessExecutor::new("rustc", "rs", "rust").args(&[
+        "-o",
+        "/tmp/kkachi_rust_exec",
+        "--edition=2021",
+    ])
 }
 
 // ============================================================================
@@ -393,8 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_executor_env() {
-        let exec = python_executor()
-            .env("TEST_VAR", "test_value");
+        let exec = python_executor().env("TEST_VAR", "test_value");
         assert_eq!(exec.env_vars.len(), 1);
     }
 

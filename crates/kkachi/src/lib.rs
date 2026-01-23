@@ -130,9 +130,10 @@ pub use optimizers::{
 
 // DSPy modules
 pub use modules::{
-    bon_with_pool, multi_chain_with_pool, BestOfN, CandidatePool, CandidatePoolStats, ChainOfThought,
-    ChainPool, ChainPoolStats, CodeExecutor, ExecutionResult, MultiChain, ProgramOfThought, ReAct,
-    Refine as ModuleRefine, RefineConfig, ScoredCandidate, ScoredChain, Tool, ToolResult,
+    bon_with_pool, multi_chain_with_pool, BestOfN, CandidatePool, CandidatePoolStats,
+    ChainOfThought, ChainPool, ChainPoolStats, CodeExecutor, ExecutionResult, MultiChain,
+    ProgramOfThought, ReAct, Refine as ModuleRefine, RefineConfig, ScoredCandidate, ScoredChain,
+    Tool, ToolResult,
 };
 
 // Recall/Precision mode
@@ -157,41 +158,123 @@ pub use executor::{
 
 // Recursive Language Prompting (new simplified API)
 pub use recursive::{
-    // Core refinement
-    refine, Config as RefineConfig2, Refine as RefineBuilder2, RefineResult,
+    agent,
+    all,
+    any,
+    bash_executor,
+    best_of,
     // Validation
-    checks, cli, all, any, Checks, Cli, CliCapture, CliExecutor, All, And, Any, Or, ValidateExt,
-    Validate, Score, NoValidation, AlwaysFail, BoolValidator, FnValidator, ScoreValidator,
+    checks,
+    cli,
+    cosine_similarity,
+    ensemble,
+    extract_all_code,
+    extract_code,
+    extract_section,
     // Memory/RAG
-    memory, Memory, Document, Recall, Embedder, HashEmbedder, VectorIndex, LinearIndex,
-    cosine_similarity, mmr_select,
-    // LLM trait
-    Llm, LmOutput, MockLlm, IterativeMockLlm, FailingLlm, BoxedLlm,
-    // Results
-    Compiled, ContextId, Correction, Example as RefineExample, Iteration, OptimizedPrompt,
+    memory,
+    mmr_select,
+    node_executor,
+    program,
+    python_executor,
+    reason,
+    // Core refinement
+    refine,
     // Markdown rewriting
-    rewrite, extract_code, extract_all_code, extract_section, Rewrite,
-    // Template
-    FormatSpec, FormatType, JsonSchema, PromptTone, Template, TemplateExample, TemplateOptions,
-    ToneModifiers,
+    rewrite,
+    ruby_executor,
     // DSPy-style patterns (new API)
-    tool, Tool as DspTool, MockTool as DspMockTool, FnTool, AsyncFnTool, ToolBuilder,
-    CodeExecutor as DspCodeExecutor, ExecutionResult as DspExecutionResult, ProcessExecutor,
-    python_executor, node_executor, bash_executor, ruby_executor,
-    reason, Reason, ReasonConfig as ReasonCfg, ReasonResult,
-    best_of, BestOf, BestOfConfig, BestOfResult, Scorer, DefaultScorer, FnScorer,
-    CandidatePool as DspCandidatePool, ScoredCandidate as DspScoredCandidate, PoolStats,
-    ensemble, Ensemble as DspEnsemble, EnsembleConfig as DspEnsembleConfig, EnsembleResult as DspEnsembleResult,
-    Aggregate, ConsensusPool, ChainResult,
-    agent, Agent, AgentConfig, AgentResult, Step,
-    program, Program, ProgramConfig, ProgramResult,
+    tool,
+    Agent,
+    AgentConfig,
+    AgentResult,
+    Aggregate,
+    All,
+    AlwaysFail,
+    And,
+    Any,
+    AsyncFnTool,
+    BestOf,
+    BestOfConfig,
+    BestOfResult,
+    BoolValidator,
+    BoxedLlm,
+    CandidatePool as DspCandidatePool,
+    ChainResult,
+    Checks,
+    Cli,
+    CliCapture,
+    CliExecutor,
+    CodeExecutor as DspCodeExecutor,
+    // Results
+    Compiled,
+    Config as RefineConfig2,
+    ConsensusPool,
+    ContextId,
+    Correction,
+    DefaultScorer,
+    Document,
+    Embedder,
+    Ensemble as DspEnsemble,
+    EnsembleConfig as DspEnsembleConfig,
+    EnsembleResult as DspEnsembleResult,
+    Example as RefineExample,
+    ExecutionResult as DspExecutionResult,
+    FailingLlm,
+    FnScorer,
+    FnTool,
+    FnValidator,
+    // Template
+    FormatSpec,
+    FormatType,
+    HashEmbedder,
+    Iteration,
+    IterativeMockLlm,
+    JsonSchema,
+    LinearIndex,
+    // LLM trait
+    Llm,
+    LmOutput,
+    Memory,
+    MockLlm,
+    MockTool as DspMockTool,
+    NoValidation,
+    OptimizedPrompt,
+    Or,
+    PoolStats,
+    ProcessExecutor,
+    Program,
+    ProgramConfig,
+    ProgramResult,
+    PromptTone,
+    Reason,
+    ReasonConfig as ReasonCfg,
+    ReasonResult,
+    Recall,
+    Refine as RefineBuilder2,
+    RefineResult,
+    Rewrite,
+    Score,
+    ScoreValidator,
+    ScoredCandidate as DspScoredCandidate,
+    Scorer,
+    Step,
+    Template,
+    TemplateExample,
+    TemplateOptions,
+    ToneModifiers,
+    Tool as DspTool,
+    ToolBuilder,
+    Validate,
+    ValidateExt,
+    VectorIndex,
 };
 
 // Feature-gated recursive exports
-#[cfg(feature = "embeddings-onnx")]
-pub use recursive::{OnnxEmbedder, OnnxEmbedderError};
 #[cfg(feature = "hnsw")]
 pub use recursive::HnswIndex;
+#[cfg(feature = "embeddings-onnx")]
+pub use recursive::{OnnxEmbedder, OnnxEmbedderError};
 
 // Diff visualization
 pub use diff::{
@@ -224,7 +307,7 @@ pub mod prelude {
     pub use crate::{Error, OptimizationDetails, Result};
 
     // Zero-copy types
-    pub use crate::{Buffer, BufferView, StrView, Sym, resolve, sym};
+    pub use crate::{resolve, sym, Buffer, BufferView, StrView, Sym};
 
     // Core types
     pub use crate::{
@@ -239,9 +322,10 @@ pub mod prelude {
 
     // DSPy modules (old API - kept for compatibility)
     pub use crate::{
-        BestOfN, CandidatePool as OldCandidatePool, ChainOfThought, ChainPool, CodeExecutor as OldCodeExecutor, ExecutionResult,
-        MultiChain, ProgramOfThought, ReAct, ModuleRefine, RefineConfig, ScoredCandidate as OldScoredCandidate,
-        ScoredChain, Tool as OldTool, ToolResult, bon_with_pool, multi_chain_with_pool,
+        bon_with_pool, multi_chain_with_pool, BestOfN, CandidatePool as OldCandidatePool,
+        ChainOfThought, ChainPool, CodeExecutor as OldCodeExecutor, ExecutionResult, ModuleRefine,
+        MultiChain, ProgramOfThought, ReAct, RefineConfig, ScoredCandidate as OldScoredCandidate,
+        ScoredChain, Tool as OldTool, ToolResult,
     };
 
     // Adapters
@@ -263,7 +347,7 @@ pub mod prelude {
     pub use crate::RecallPrecisionMode;
 
     // LM Client
-    pub use crate::{LMClient, predict_with_lm};
+    pub use crate::{predict_with_lm, LMClient};
 }
 
 /// Version of the library

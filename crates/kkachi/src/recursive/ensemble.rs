@@ -39,7 +39,11 @@ use std::collections::HashMap;
 ///
 /// let result = ensemble(&llm, "What is the answer?", 3).go();
 /// ```
-pub fn ensemble<'a, L: Llm>(llm: &'a L, prompt: &'a str, n: usize) -> Ensemble<'a, L, NoValidation> {
+pub fn ensemble<'a, L: Llm>(
+    llm: &'a L,
+    prompt: &'a str,
+    n: usize,
+) -> Ensemble<'a, L, NoValidation> {
     Ensemble::new(llm, prompt, n)
 }
 
@@ -247,32 +251,27 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
                 (original, count)
             }
             Aggregate::LongestAnswer => {
-                let chain = chains
-                    .iter()
-                    .max_by_key(|c| c.raw_answer.len());
+                let chain = chains.iter().max_by_key(|c| c.raw_answer.len());
                 match chain {
                     Some(c) => (c.raw_answer.clone(), 1),
                     None => (String::new(), 0),
                 }
             }
             Aggregate::ShortestAnswer => {
-                let chain = chains
-                    .iter()
-                    .min_by_key(|c| c.raw_answer.len());
+                let chain = chains.iter().min_by_key(|c| c.raw_answer.len());
                 match chain {
                     Some(c) => (c.raw_answer.clone(), 1),
                     None => (String::new(), 0),
                 }
             }
             Aggregate::FirstSuccess => {
-                let chain = chains
-                    .iter()
-                    .find(|c| c.validator_score >= 1.0);
+                let chain = chains.iter().find(|c| c.validator_score >= 1.0);
                 match chain {
                     Some(c) => (c.raw_answer.clone(), 1),
                     None => {
                         // Fall back to first answer
-                        let first = chains.first()
+                        let first = chains
+                            .first()
                             .map(|c| c.raw_answer.clone())
                             .unwrap_or_default();
                         (first, 1)
@@ -287,7 +286,8 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
                     .unwrap_or(false);
 
                 if all_same {
-                    let answer = chains.first()
+                    let answer = chains
+                        .first()
                         .map(|c| c.raw_answer.clone())
                         .unwrap_or_default();
                     (answer, chains.len())
@@ -406,7 +406,11 @@ impl ConsensusPool {
         if self.chains.is_empty() {
             return 0.0;
         }
-        let agreeing = self.chains.iter().filter(|c| c.agrees_with_majority).count();
+        let agreeing = self
+            .chains
+            .iter()
+            .filter(|c| c.agrees_with_majority)
+            .count();
         agreeing as f64 / self.chains.len() as f64
     }
 
@@ -451,7 +455,7 @@ mod tests {
         let llm = MockLlm::new(move |_, _| {
             let n = counter.fetch_add(1, Ordering::SeqCst);
             match n % 3 {
-                0 | 1 => "Paris".to_string(),  // 2/3 = majority
+                0 | 1 => "Paris".to_string(), // 2/3 = majority
                 _ => "London".to_string(),
             }
         });
@@ -468,8 +472,7 @@ mod tests {
     fn test_ensemble_with_consensus() {
         let llm = MockLlm::new(|_, _| "42".to_string());
 
-        let (result, pool) = ensemble(&llm, "Answer?", 5)
-            .go_with_consensus();
+        let (result, pool) = ensemble(&llm, "Answer?", 5).go_with_consensus();
 
         assert_eq!(result.chains_generated, 5);
         assert!(pool.has_unanimous_agreement());
@@ -525,8 +528,7 @@ mod tests {
             }
         });
 
-        let (result, pool) = ensemble(&llm, "Capital?", 3)
-            .go_with_consensus();
+        let (result, pool) = ensemble(&llm, "Capital?", 3).go_with_consensus();
 
         // All should be treated as same answer after normalization
         assert!(pool.has_unanimous_agreement());

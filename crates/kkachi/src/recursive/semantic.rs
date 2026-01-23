@@ -248,11 +248,8 @@ impl<'a, L: Llm> Validate for SemanticValidator<'a, L> {
 
         match response {
             Ok(output) => self.parse_judgment(&output.text),
-            Err(e) => Score::with_feedback(
-                0.5,
-                format!("Semantic validation error: {}", e),
-            )
-            .with_confidence(0.0),
+            Err(e) => Score::with_feedback(0.5, format!("Semantic validation error: {}", e))
+                .with_confidence(0.0),
         }
     }
 
@@ -342,14 +339,9 @@ mod tests {
 
     #[test]
     fn test_semantic_validator_below_threshold() {
-        let llm = MockLlm::new(|_, _| {
-            r#"{"overall": 0.5, "confidence": 0.8}"#.to_string()
-        });
+        let llm = MockLlm::new(|_, _| r#"{"overall": 0.5, "confidence": 0.8}"#.to_string());
 
-        let validator = semantic(&llm)
-            .criterion("Quality")
-            .threshold(0.7)
-            .build();
+        let validator = semantic(&llm).criterion("Quality").threshold(0.7).build();
 
         let score = validator.validate("bad code");
 
