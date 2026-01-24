@@ -27,6 +27,7 @@
 
 use crate::recursive::llm::Llm;
 use crate::recursive::tool::Tool;
+use crate::recursive::validate::Validate;
 use smallvec::SmallVec;
 
 /// Entry point for creating a ReAct agent.
@@ -77,6 +78,7 @@ pub struct Agent<'a, L: Llm> {
     goal: &'a str,
     tools: SmallVec<[&'a dyn Tool; 4]>,
     config: AgentConfig,
+    validator: Option<Box<dyn Validate + 'a>>,
     on_step: Option<Box<dyn Fn(&Step) + Send + Sync + 'a>>,
 }
 
@@ -88,6 +90,7 @@ impl<'a, L: Llm> Agent<'a, L> {
             goal,
             tools: SmallVec::new(),
             config: AgentConfig::default(),
+            validator: None,
             on_step: None,
         }
     }
@@ -109,6 +112,22 @@ impl<'a, L: Llm> Agent<'a, L> {
     /// Set maximum number of reasoning steps.
     pub fn max_steps(mut self, n: usize) -> Self {
         self.config.max_steps = n.max(1);
+        self
+    }
+
+    /// Set maximum iterations (alias for `max_steps`).
+    ///
+    /// Provides a consistent API with other builders (`refine`, `reason`, `program`).
+    pub fn max_iter(self, n: u32) -> Self {
+        self.max_steps(n as usize)
+    }
+
+    /// Set a validator for the agent's final answer.
+    ///
+    /// When set, the agent validates its final answer. If validation fails,
+    /// the feedback is added to the trajectory and the agent continues reasoning.
+    pub fn validate<V: Validate + 'a>(mut self, validator: V) -> Self {
+        self.validator = Some(Box::new(validator));
         self
     }
 
@@ -164,6 +183,56 @@ impl<'a, L: Llm> Agent<'a, L> {
             // Parse the response
             match self.parse_response(&output.text) {
                 ParsedResponse::FinalAnswer(answer) => {
+                    // Validate the answer if a validator is set
+                    if let Some(ref validator) = self.validator {
+                        let score = validator.validate(&answer);
+                        if score.value < 1.0 {
+                            // Validation failed — add feedback and continue
+                            let feedback = score
+                                .feedback_str()
+                                .unwrap_or("Answer did not pass validation")
+                                .to_string();
+                            let thought = output
+                                .text
+                                .find("Final Answer:")
+                                .map(|idx| output.text[..idx].trim().to_string())
+                                .unwrap_or_default();
+                            let step = Step {
+                                thought,
+                                action: String::new(),
+                                action_input: String::new(),
+                                observation: format!(
+                                    "Validation failed: {}. Please try again.",
+                                    feedback
+                                ),
+                            };
+                            if let Some(ref on_step) = self.on_step {
+                                on_step(&step);
+                            }
+                            trajectory.push(step);
+                            continue;
+                        }
+                    }
+
+                    // Record the final thought in trajectory for observability
+                    if self.config.include_trajectory {
+                        let thought = output
+                            .text
+                            .find("Final Answer:")
+                            .map(|idx| output.text[..idx].trim().to_string())
+                            .unwrap_or_default();
+                        let step = Step {
+                            thought,
+                            action: String::new(),
+                            action_input: String::new(),
+                            observation: format!("Final Answer: {}", &answer),
+                        };
+                        if let Some(ref on_step) = self.on_step {
+                            on_step(&step);
+                        }
+                        trajectory.push(step);
+                    }
+
                     return AgentResult {
                         output: answer,
                         trajectory: if self.config.include_trajectory {
@@ -430,7 +499,7 @@ mod tests {
 
         assert!(result.success);
         assert_eq!(result.output, "8");
-        assert_eq!(result.trajectory.len(), 1);
+        assert_eq!(result.trajectory.len(), 2); // tool call + final answer
         assert_eq!(result.trajectory[0].action, "calculator");
     }
 
@@ -490,7 +559,8 @@ mod tests {
             .go();
 
         assert!(result.success);
-        assert_eq!(callback_count.load(Ordering::SeqCst), 2);
+        // 2 tool calls + 1 final answer step
+        assert_eq!(callback_count.load(Ordering::SeqCst), 3);
     }
 
     #[test]
@@ -501,6 +571,30 @@ mod tests {
 
         assert!(result.success);
         assert!(result.trajectory.is_empty());
+    }
+
+    #[test]
+    fn test_agent_with_validation() {
+        use crate::recursive::checks::checks;
+
+        let counter = AtomicUsize::new(0);
+        let llm = MockLlm::new(move |_, _| {
+            let n = counter.fetch_add(1, Ordering::SeqCst);
+            match n {
+                0 => "First try.\nFinal Answer: wrong".to_string(),
+                _ => "Second try.\nFinal Answer: 42".to_string(),
+            }
+        });
+
+        let result = agent(&llm, "Give me a number")
+            .validate(checks().regex(r"^\d+$"))
+            .max_steps(5)
+            .go();
+
+        assert!(result.success);
+        assert_eq!(result.output, "42");
+        // Should have taken 2 steps (first answer failed validation)
+        assert_eq!(result.steps, 2);
     }
 
     #[test]

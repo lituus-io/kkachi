@@ -185,6 +185,73 @@ impl JinjaTemplate {
     }
 }
 
+// ============================================================================
+// JinjaFormatter: PromptFormatter implementation using JinjaTemplate
+// ============================================================================
+
+/// A [`PromptFormatter`] that uses a Jinja template to format prompts.
+///
+/// The template receives the following variables:
+/// - `task`: The base prompt/task description
+/// - `feedback`: Feedback from the previous iteration (empty string if none)
+/// - `iteration`: The current iteration number as a string
+///
+/// # Example
+///
+/// ```
+/// use kkachi::declarative::jinja::{JinjaTemplate, JinjaFormatter};
+/// use kkachi::recursive::formatter::PromptFormatter;
+///
+/// let template = JinjaTemplate::from_str("refine", r#"
+/// ## Task
+/// {{ task }}
+///
+/// {% if feedback %}
+/// ## Previous Feedback
+/// {{ feedback }}
+/// {% endif %}
+///
+/// ## Requirements
+/// - Must compile
+/// - Must include error handling
+/// "#).unwrap();
+///
+/// let fmt = JinjaFormatter::new(template);
+/// let result = fmt.format("Write a Rust HTTP client", None, 0);
+/// assert!(result.contains("Write a Rust HTTP client"));
+/// assert!(result.contains("Must compile"));
+/// ```
+pub struct JinjaFormatter {
+    template: JinjaTemplate,
+}
+
+impl JinjaFormatter {
+    /// Create a new JinjaFormatter from a JinjaTemplate.
+    pub fn new(template: JinjaTemplate) -> Self {
+        Self { template }
+    }
+}
+
+impl crate::recursive::formatter::PromptFormatter for JinjaFormatter {
+    fn format<'a>(
+        &'a self,
+        prompt: &'a str,
+        feedback: Option<&str>,
+        iteration: u32,
+    ) -> std::borrow::Cow<'a, str> {
+        let iteration_str = iteration.to_string();
+        let rendered = self.template.render_strings(&[
+            ("task", prompt),
+            ("feedback", feedback.unwrap_or("")),
+            ("iteration", &iteration_str),
+        ]);
+        match rendered {
+            Ok(s) => std::borrow::Cow::Owned(s),
+            Err(_) => std::borrow::Cow::Borrowed(prompt),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +381,58 @@ Language: {{ language | default("yaml") }}
         assert!(output.contains("```yaml"));
         assert!(output.contains("gcp:storage:Bucket"));
         assert!(output.contains("```\n") || output.ends_with("```"));
+    }
+
+    #[test]
+    fn test_jinja_formatter_no_feedback() {
+        use crate::recursive::formatter::PromptFormatter;
+
+        let template = JinjaTemplate::from_str(
+            "fmt_test",
+            r#"## Task
+{{ task }}
+
+## Rules
+- Be concise"#,
+        )
+        .unwrap();
+
+        let fmt = JinjaFormatter::new(template);
+        let result = fmt.format("Write hello world", None, 0);
+        assert!(result.contains("Write hello world"));
+        assert!(result.contains("Be concise"));
+    }
+
+    #[test]
+    fn test_jinja_formatter_with_feedback() {
+        use crate::recursive::formatter::PromptFormatter;
+
+        let template = JinjaTemplate::from_str(
+            "fmt_fb",
+            r#"{{ task }}
+{% if feedback %}
+Feedback: {{ feedback }}
+{% endif %}
+Iteration: {{ iteration }}"#,
+        )
+        .unwrap();
+
+        let fmt = JinjaFormatter::new(template);
+        let result = fmt.format("task", Some("improve it"), 2);
+        assert!(result.contains("task"));
+        assert!(result.contains("Feedback: improve it"));
+        assert!(result.contains("Iteration: 2"));
+    }
+
+    #[test]
+    fn test_jinja_formatter_uses_task_variable() {
+        use crate::recursive::formatter::PromptFormatter;
+
+        // Template that uses the task variable
+        let template = JinjaTemplate::from_str("task_test", "Task: {{ task }}").unwrap();
+
+        let fmt = JinjaFormatter::new(template);
+        let result = fmt.format("original prompt", None, 0);
+        assert_eq!(result.as_ref(), "Task: original prompt");
     }
 }

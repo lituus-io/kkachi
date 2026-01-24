@@ -42,10 +42,24 @@ impl PyChecks {
         }
     }
 
+    /// Require multiple patterns to be present in the output.
+    fn require_all(&self, patterns: Vec<String>) -> Self {
+        Self {
+            inner: self.inner.clone().require_all(patterns),
+        }
+    }
+
     /// Forbid a pattern from appearing in the output.
     fn forbid(&self, pattern: String) -> Self {
         Self {
             inner: self.inner.clone().forbid(&pattern),
+        }
+    }
+
+    /// Forbid multiple patterns from appearing in the output.
+    fn forbid_all(&self, patterns: Vec<String>) -> Self {
+        Self {
+            inner: self.inner.clone().forbid_all(patterns),
         }
     }
 
@@ -67,6 +81,13 @@ impl PyChecks {
     fn regex(&self, pattern: String) -> Self {
         Self {
             inner: self.inner.clone().regex(&pattern),
+        }
+    }
+
+    /// Add multiple regex patterns for validation.
+    fn regex_all(&self, patterns: Vec<String>) -> Self {
+        Self {
+            inner: self.inner.clone().regex_all(patterns),
         }
     }
 

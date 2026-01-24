@@ -42,9 +42,11 @@ coverage/
 *.pdf
 
 # Cache
-.kkachi_cache/
 *.bin
 .cache/
+
+# ONNX models (downloaded for testing)
+/models/
 
 # Build artifacts
 /dist/
@@ -101,6 +103,3 @@ wheels/
 venv/
 ENV/
 
-# WASM (for kkachi-wasm)
-pkg/
-*.wasm.map

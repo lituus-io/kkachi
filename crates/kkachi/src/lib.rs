@@ -27,19 +27,21 @@
 //! let llm = MockLlm::new(|prompt, _| "fn add(a: i32, b: i32) -> i32 { a + b }".to_string());
 //!
 //! // Simple refinement with validation
-//! let code = refine(&llm, "Write an add function")
+//! let result = refine(&llm, "Write an add function")
 //!     .validate(checks().require("fn ").require("->"))
 //!     .max_iter(5)
-//!     .go();
+//!     .go()
+//!     .unwrap();
 //!
 //! // CLI validation pipeline
 //! let validator = cli("rustfmt").arg("--check")
 //!     .then("rustc").args(&["--emit=metadata"]).required()
 //!     .ext("rs");
 //!
-//! let code = refine(&llm, "Write a parser")
+//! let result = refine(&llm, "Write a parser")
 //!     .validate(validator)
-//!     .go();
+//!     .go()
+//!     .unwrap();
 //! ```
 
 #![warn(missing_docs)]
@@ -128,13 +130,9 @@ pub use optimizers::{
     SelectionStrategy, TPESampler, COPRO, MIPRO, SIMBA,
 };
 
-// DSPy modules
-pub use modules::{
-    bon_with_pool, multi_chain_with_pool, BestOfN, CandidatePool, CandidatePoolStats,
-    ChainOfThought, ChainPool, ChainPoolStats, CodeExecutor, ExecutionResult, MultiChain,
-    ProgramOfThought, ReAct, Refine as ModuleRefine, RefineConfig, ScoredCandidate, ScoredChain,
-    Tool, ToolResult,
-};
+// DSPy modules (accessible via kkachi::modules::*)
+// Note: These are the legacy DSPy-style module types. Prefer the recursive API
+// (e.g., `refine()`, `best_of()`, `ensemble()`, `agent()`) for new code.
 
 // Recall/Precision mode
 pub use recall_precision::RecallPrecisionMode;
@@ -156,17 +154,21 @@ pub use executor::{
     ScopedBuffer,
 };
 
-// Recursive Language Prompting (new simplified API)
+// Recursive Language Prompting (primary API)
 pub use recursive::{
+    // Agent
     agent,
     all,
     any,
+    // Code execution
     bash_executor,
+    // Best-of-N
     best_of,
     // Validation
     checks,
     cli,
     cosine_similarity,
+    // Ensemble
     ensemble,
     extract_all_code,
     extract_code,
@@ -174,17 +176,28 @@ pub use recursive::{
     // Memory/RAG
     memory,
     mmr_select,
+    // Multi-objective / Pareto
+    multi_objective,
     node_executor,
+    parse_output,
+    // Pipeline
+    pipeline,
+    // Program
     program,
     python_executor,
+    // Reason
     reason,
     // Core refinement
     refine,
+    refine_pareto,
+    refine_pareto_sync,
     // Markdown rewriting
     rewrite,
     ruby_executor,
-    // DSPy-style patterns (new API)
+    // Tool
     tool,
+    // Typed/structured output
+    typed,
     Agent,
     AgentConfig,
     AgentResult,
@@ -199,32 +212,38 @@ pub use recursive::{
     BestOfResult,
     BoolValidator,
     BoxedLlm,
-    CandidatePool as DspCandidatePool,
+    BranchBuilder,
+    CacheExt,
+    // Caching, retry, and rate limiting
+    CachedLlm,
+    CandidatePool,
     ChainResult,
     Checks,
     Cli,
     CliCapture,
-    CliExecutor,
-    CodeExecutor as DspCodeExecutor,
-    // Results
+    CliLlm,
+    CliTool,
+    CodeExecutor,
+    // Results and state
     Compiled,
-    Config as RefineConfig2,
+    Config as RefineConfig,
     ConsensusPool,
     ContextId,
+    // Multi-turn conversation
+    Conversation,
     Correction,
     DefaultScorer,
+    Direction,
     Document,
     Embedder,
-    Ensemble as DspEnsemble,
-    EnsembleConfig as DspEnsembleConfig,
-    EnsembleResult as DspEnsembleResult,
-    Example as RefineExample,
-    ExecutionResult as DspExecutionResult,
+    ExecutionResult,
     FailingLlm,
+    FanOutBranchResult,
+    FeedbackFormatter,
     FnScorer,
     FnTool,
     FnValidator,
-    // Template
+    FormatInstruction,
     FormatSpec,
     FormatType,
     HashEmbedder,
@@ -232,39 +251,67 @@ pub use recursive::{
     IterativeMockLlm,
     JsonSchema,
     LinearIndex,
-    // LLM trait
+    // LLM trait and implementations
     Llm,
+    LlmExt,
     LmOutput,
     Memory,
+    MergeStrategy,
+    Message,
     MockLlm,
-    MockTool as DspMockTool,
+    MockTool,
+    MultiObjective,
+    MultiObjectiveValidate,
+    MultiScore,
     NoValidation,
+    Objective,
     OptimizedPrompt,
     Or,
+    ParetoCandidate,
+    ParetoFront,
+    ParetoRefineResult,
+    PassthroughFormatter,
+    Pipeline,
+    PipelineEvent,
+    PipelineResult,
     PoolStats,
     ProcessExecutor,
     Program,
     ProgramConfig,
     ProgramResult,
+    // Prompt formatting
+    PromptFormatter,
     PromptTone,
+    RateLimitConfig,
+    RateLimitExt,
+    RateLimitedLlm,
     Reason,
-    ReasonConfig as ReasonCfg,
+    ReasonConfig,
     ReasonResult,
     Recall,
-    Refine as RefineBuilder2,
+    Refine,
+    RefineEvent,
     RefineResult,
+    RetryConfig,
+    RetryLlm,
     Rewrite,
+    Role,
+    Scalarization,
     Score,
     ScoreValidator,
-    ScoredCandidate as DspScoredCandidate,
+    ScoredCandidate,
     Scorer,
     Step,
+    StepResult,
+    StopReason,
+    // Template
     Template,
     TemplateExample,
     TemplateOptions,
     ToneModifiers,
-    Tool as DspTool,
+    Tool,
     ToolBuilder,
+    TypedValidator,
     Validate,
     ValidateExt,
     VectorIndex,
@@ -290,7 +337,7 @@ pub use hitl::{
 };
 
 // Declarative API (thin re-export of recursive + Jinja)
-pub use declarative::{JinjaTemplate, JinjaValue};
+pub use declarative::{JinjaFormatter, JinjaTemplate, JinjaValue};
 
 // Zero-copy types
 pub use buffer::{Buffer, BufferView};
@@ -318,14 +365,6 @@ pub mod prelude {
     // Optimizer system
     pub use crate::{
         BootstrapFewShot, ExampleSet, Optimizer, OptimizerConfig, COPRO, MIPRO, SIMBA,
-    };
-
-    // DSPy modules (old API - kept for compatibility)
-    pub use crate::{
-        bon_with_pool, multi_chain_with_pool, BestOfN, CandidatePool as OldCandidatePool,
-        ChainOfThought, ChainPool, CodeExecutor as OldCodeExecutor, ExecutionResult, ModuleRefine,
-        MultiChain, ProgramOfThought, ReAct, RefineConfig, ScoredCandidate as OldScoredCandidate,
-        ScoredChain, Tool as OldTool, ToolResult,
     };
 
     // Adapters

@@ -95,6 +95,23 @@ pub trait CodeExecutor: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send + 'a>>;
 }
 
+impl CodeExecutor for Box<dyn CodeExecutor> {
+    fn language(&self) -> &str {
+        (**self).language()
+    }
+
+    fn extension(&self) -> &str {
+        (**self).extension()
+    }
+
+    fn execute<'a>(
+        &'a self,
+        code: &'a str,
+    ) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send + 'a>> {
+        (**self).execute(code)
+    }
+}
+
 /// CLI-based code executor that runs code via external process.
 pub struct ProcessExecutor {
     command: &'static str,

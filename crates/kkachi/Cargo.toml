@@ -3,7 +3,7 @@ name = "kkachi"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+license-file = "LICENSE"
 repository.workspace = true
 homepage.workspace = true
 documentation.workspace = true
@@ -32,6 +32,11 @@ blake3 = { workspace = true }
 hex = { workspace = true }
 similar = { workspace = true }
 minijinja = { workspace = true }
+lru = { workspace = true }
+tracing = { workspace = true, optional = true }
+
+# HTTP client (for API-based LLM providers)
+reqwest = { workspace = true, optional = true }
 
 # Native-only dependencies (not WASM-compatible)
 tokio = { workspace = true, optional = true }
@@ -55,10 +60,18 @@ ndarray = { workspace = true, optional = true }
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = { workspace = true }
+criterion = { workspace = true }
+tokio = { workspace = true }
+
+[[bench]]
+name = "llm_benchmarks"
+harness = false
 
 [features]
 default = ["std", "native"]
 std = []
+# Real LLM API client (Anthropic, OpenAI, Claude Code CLI)
+api = ["dep:reqwest"]
 # Native platform support (includes tokio with full features, rayon, etc.)
 native = ["tokio", "tokio-stream", "memmap2", "rayon", "console"]
 # WASM support (minimal async runtime, no networking/threading)
@@ -74,5 +87,7 @@ chunking = ["text-splitter"]
 embeddings-onnx = ["ort", "tokenizers", "ndarray"]
 # HNSW approximate nearest neighbor search
 hnsw = []
+# Tracing integration (opt-in instrumentation with tracing crate)
+tracing = ["dep:tracing"]
 # All embedding/index features
 embeddings-full = ["embeddings-onnx", "hnsw"]

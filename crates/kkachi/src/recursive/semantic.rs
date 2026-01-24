@@ -11,20 +11,24 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use kkachi::recursive::{semantic, checks, refine, MockLlm};
+//! ```no_run
+//! use kkachi::recursive::{semantic, checks, refine, CliLlm, ValidateExt};
 //!
-//! let judge_llm = MockLlm::new(|_, _| r#"{"overall": 0.9, "confidence": 0.85}"#.to_string());
-//! let generator_llm = MockLlm::new(|_, _| "fn parse(s: &str) -> i32 { s.parse().unwrap() }".to_string());
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let llm = CliLlm::new()?;
 //!
-//! let semantic = semantic(&judge_llm)
-//!     .criterion("Code is idiomatic Rust")
-//!     .criterion("Error handling is complete")
-//!     .threshold(0.8);
+//!     let validator = semantic(&llm)
+//!         .criterion("Code is idiomatic Rust")
+//!         .criterion("Error handling is complete")
+//!         .threshold(0.8)
+//!         .build();
 //!
-//! let result = refine(&generator_llm, "Write a parser")
-//!     .validate(checks().require("fn ").and(semantic))
-//!     .go_full();
+//!     let result = refine(&llm, "Write a Rust parser for integers")
+//!         .validate(checks().require("fn ").and(validator))
+//!         .max_iter(3)
+//!         .go();
+//!     Ok(())
+//! }
 //! ```
 
 use crate::recursive::llm::Llm;
@@ -41,11 +45,11 @@ use smallvec::SmallVec;
 ///
 /// # Example
 ///
-/// ```ignore
-/// use kkachi::recursive::{semantic, MockLlm};
+/// ```no_run
+/// use kkachi::recursive::{semantic, CliLlm};
 ///
-/// let judge = MockLlm::new(|_, _| r#"{"overall": 0.9, "confidence": 0.85}"#.to_string());
-/// let validator = semantic(&judge)
+/// let llm = CliLlm::new().unwrap();
+/// let validator = semantic(&llm)
 ///     .criterion("Code follows best practices")
 ///     .threshold(0.8)
 ///     .build();
@@ -79,7 +83,10 @@ impl<'a, L: Llm> SemanticBuilder<'a, L> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// use kkachi::recursive::{semantic, CliLlm};
+    ///
+    /// let llm = CliLlm::new().unwrap();
     /// let validator = semantic(&llm)
     ///     .criterion("Code is idiomatic Rust")
     ///     .criterion("Error handling is complete")
@@ -243,8 +250,20 @@ impl<'a, L: Llm> Validate for SemanticValidator<'a, L> {
     fn validate(&self, text: &str) -> Score<'static> {
         let prompt = self.build_judge_prompt(text);
 
-        // Call LLM synchronously using block_on
-        let response = futures::executor::block_on(self.llm.generate(&prompt, "", None));
+        // Use a scoped thread to avoid nested executor panics.
+        // When SemanticValidator is used inside refine().go(), the outer .go()
+        // already holds a futures::executor::block_on context. Calling block_on
+        // again on the same thread panics. A scoped thread has its own stack
+        // with no executor, so the inner block_on works safely.
+        let response = std::thread::scope(|s| {
+            s.spawn(|| futures::executor::block_on(self.llm.generate(&prompt, "", None)))
+                .join()
+                .unwrap_or_else(|_| {
+                    Err(crate::error::Error::module(
+                        "Semantic validation thread panicked",
+                    ))
+                })
+        });
 
         match response {
             Ok(output) => self.parse_judgment(&output.text),

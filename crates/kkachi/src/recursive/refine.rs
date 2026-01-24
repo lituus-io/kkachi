@@ -22,20 +22,23 @@
 //! });
 //!
 //! // Simple refinement
-//! let code = refine(&llm, "Write an add function")
+//! let result = refine(&llm, "Write an add function")
 //!     .validate(checks().require("fn ").require("->"))
 //!     .max_iter(5)
-//!     .go();
+//!     .go()
+//!     .unwrap();
 //!
-//! assert!(code.contains("fn add"));
+//! assert!(result.output.contains("fn add"));
 //! ```
 
 use crate::error::Result;
 use crate::recursive::cli::CliCapture;
+use crate::recursive::formatter::{PassthroughFormatter, PromptFormatter};
 use crate::recursive::llm::Llm;
 use crate::recursive::memory::Memory;
 use crate::recursive::result::{
-    Compiled, ContextId, Correction, Example, Iteration, OptimizedPrompt, RefineResult, StopReason,
+    Compiled, ContextId, Correction, Example, Iteration, OptimizedPrompt, RefineEvent,
+    RefineResult, StopReason,
 };
 use crate::recursive::rewrite::extract_code;
 use crate::recursive::validate::{NoValidation, Score, Validate};
@@ -70,6 +73,8 @@ pub struct Config {
     pub extend_on_progress: Option<u32>,
     /// Exit early if no improvement for this many iterations (for adaptive mode).
     pub early_exit_stagnation: Option<u32>,
+    /// Extract code blocks in this language before validation.
+    pub extract_lang: Option<String>,
 }
 
 impl Default for Config {
@@ -87,6 +92,7 @@ impl Default for Config {
             min_iterations: 1,
             extend_on_progress: None,
             early_exit_stagnation: None,
+            extract_lang: None,
         }
     }
 }
@@ -106,7 +112,7 @@ impl Default for Config {
 /// use kkachi::recursive::{refine, MockLlm};
 ///
 /// let llm = MockLlm::new(|prompt, _| format!("Response to: {}", prompt));
-/// let result = refine(&llm, "Write a function").go();
+/// let result = refine(&llm, "Write a function").go().unwrap();
 /// ```
 pub fn refine<'a, L: Llm>(llm: &'a L, prompt: &'a str) -> Refine<'a, L, NoValidation> {
     Refine::new(llm, prompt)
@@ -116,10 +122,18 @@ pub fn refine<'a, L: Llm>(llm: &'a L, prompt: &'a str) -> Refine<'a, L, NoValida
 ///
 /// This struct accumulates configuration and then executes the refinement
 /// loop when one of the execution methods is called.
-pub struct Refine<'a, L: Llm, V: Validate = NoValidation> {
+///
+/// # Type Parameters
+///
+/// * `L` - The LLM implementation
+/// * `V` - The validator (defaults to `NoValidation`)
+/// * `F` - The prompt formatter (defaults to `PassthroughFormatter`)
+pub struct Refine<'a, L: Llm, V: Validate = NoValidation, F: PromptFormatter = PassthroughFormatter>
+{
     llm: &'a L,
     prompt: &'a str,
     validator: V,
+    formatter: F,
     memory: Option<&'a mut Memory>,
     config: Config,
     k: usize,
@@ -131,13 +145,14 @@ pub struct Refine<'a, L: Llm, V: Validate = NoValidation> {
     _phantom: PhantomData<&'a ()>,
 }
 
-impl<'a, L: Llm> Refine<'a, L, NoValidation> {
+impl<'a, L: Llm> Refine<'a, L, NoValidation, PassthroughFormatter> {
     /// Create a new refinement builder.
     pub fn new(llm: &'a L, prompt: &'a str) -> Self {
         Self {
             llm,
             prompt,
             validator: NoValidation,
+            formatter: PassthroughFormatter,
             memory: None,
             config: Config::default(),
             k: 3,
@@ -151,15 +166,57 @@ impl<'a, L: Llm> Refine<'a, L, NoValidation> {
     }
 }
 
-impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
+impl<'a, L: Llm, V: Validate + 'a, F: PromptFormatter + 'a> Refine<'a, L, V, F> {
     /// Set the validator for this refinement.
     ///
     /// The validator determines when the output is acceptable.
-    pub fn validate<V2: Validate>(self, validator: V2) -> Refine<'a, L, V2> {
+    pub fn validate<V2: Validate>(self, validator: V2) -> Refine<'a, L, V2, F> {
         Refine {
             llm: self.llm,
             prompt: self.prompt,
             validator,
+            formatter: self.formatter,
+            memory: self.memory,
+            config: self.config,
+            k: self.k,
+            examples: self.examples,
+            source_markdown: self.source_markdown,
+            source_lang: self.source_lang,
+            on_iter: self.on_iter,
+            best_of: self.best_of,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Set the prompt formatter for this refinement.
+    ///
+    /// The formatter transforms the prompt at each iteration, incorporating
+    /// feedback and iteration context. This enables template-based prompt
+    /// construction within the refinement loop.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use kkachi::declarative::{JinjaFormatter, JinjaTemplate};
+    ///
+    /// let template = JinjaTemplate::from_str("refine", r#"
+    /// ## Task
+    /// {{ task }}
+    /// {% if feedback %}## Feedback
+    /// {{ feedback }}{% endif %}
+    /// "#).unwrap();
+    ///
+    /// let result = refine(&llm, "Write a function")
+    ///     .with_formatter(JinjaFormatter::new(template))
+    ///     .validate(checks().require("fn "))
+    ///     .run().await?;
+    /// ```
+    pub fn with_formatter<F2: PromptFormatter>(self, formatter: F2) -> Refine<'a, L, V, F2> {
+        Refine {
+            llm: self.llm,
+            prompt: self.prompt,
+            validator: self.validator,
+            formatter,
             memory: self.memory,
             config: self.config,
             k: self.k,
@@ -234,8 +291,17 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
     }
 
     /// Enable chain of thought reasoning.
-    pub fn chain_of_thought(mut self) -> Self {
+    pub fn with_reasoning(mut self) -> Self {
         self.config.chain_of_thought = true;
+        self
+    }
+
+    /// Extract code blocks in the given language before validation.
+    ///
+    /// When set, the validator receives extracted code instead of the raw LLM output.
+    /// The final result still contains the full output.
+    pub fn extract(mut self, lang: impl Into<String>) -> Self {
+        self.config.extract_lang = Some(lang.into());
         self
     }
 
@@ -246,7 +312,7 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
     }
 
     /// Set a callback for each iteration.
-    pub fn on_iter<F: Fn(u32, f64) + 'a>(mut self, f: F) -> Self {
+    pub fn on_iter<Cb: Fn(u32, f64) + 'a>(mut self, f: Cb) -> Self {
         self.on_iter = Some(Box::new(f));
         self
     }
@@ -286,7 +352,8 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
     /// let llm = MockLlm::new(|_, _| "output".to_string());
     /// let result = refine(&llm, "task")
     ///     .with_budget(10_000)  // Stop after ~10k tokens
-    ///     .go();
+    ///     .go()
+    ///     .unwrap();
     /// ```
     pub fn with_budget(mut self, max_tokens: u32) -> Self {
         self.config.token_budget = Some(max_tokens);
@@ -307,7 +374,8 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
     /// let llm = MockLlm::new(|_, _| "output".to_string());
     /// let result = refine(&llm, "task")
     ///     .with_timeout(Duration::from_secs(60))  // 1 minute max
-    ///     .go();
+    ///     .go()
+    ///     .unwrap();
     /// ```
     pub fn with_timeout(mut self, duration: Duration) -> Self {
         self.config.timeout = Some(duration);
@@ -339,7 +407,8 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
     ///     .max_iter(20)
     ///     .extend_on_progress(5)
     ///     .early_exit_on_stagnation(3)
-    ///     .go();
+    ///     .go()
+    ///     .unwrap();
     /// ```
     pub fn adaptive(mut self) -> Self {
         self.config.adaptive = true;
@@ -373,29 +442,200 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
         self
     }
 
-    /// Execute the refinement and return just the output.
-    pub fn go(self) -> String {
-        match futures::executor::block_on(self.run()) {
-            Ok(result) => result.output,
-            Err(_) => String::new(),
+    /// Enable adaptive mode with specified iteration range.
+    ///
+    /// Convenience method equivalent to `.adaptive().min_iter(min).max_iter(max)`.
+    pub fn adaptive_range(mut self, min: u32, max: u32) -> Self {
+        self.config.adaptive = true;
+        self.config.min_iterations = min.max(1);
+        self.config.max_iterations = max.max(min.max(1));
+        self
+    }
+
+    /// Execute the refinement synchronously.
+    ///
+    /// This is a convenience method that blocks on the async `run()` method.
+    /// If called inside a tokio runtime, uses `block_in_place`. Otherwise,
+    /// creates a new single-threaded runtime.
+    #[cfg(feature = "native")]
+    pub fn go(self) -> Result<RefineResult> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.run()))
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime")
+                .block_on(self.run())
         }
     }
 
-    /// Execute the refinement and return output with score.
-    pub fn go_scored(self) -> (String, f64) {
-        match futures::executor::block_on(self.run()) {
-            Ok(result) => (result.output, result.score),
-            Err(_) => (String::new(), 0.0),
-        }
-    }
-
-    /// Execute the refinement and return the full result.
-    pub fn go_full(self) -> Result<RefineResult> {
+    /// Execute the refinement synchronously (fallback without tokio).
+    #[cfg(not(feature = "native"))]
+    pub fn go(self) -> Result<RefineResult> {
         futures::executor::block_on(self.run())
+    }
+
+    /// Execute the refinement as a stream of events.
+    ///
+    /// Returns an async stream that yields [`RefineEvent`] items as the
+    /// refinement progresses, allowing real-time observation of iterations.
+    ///
+    /// This provides the same core refinement logic as `run()` but yields
+    /// events at each iteration, enabling progress monitoring.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use futures::stream::StreamExt;
+    ///
+    /// let mut stream = refine(&llm, "prompt")
+    ///     .validate(checks().require("fn "))
+    ///     .run_stream();
+    ///
+    /// while let Some(event) = stream.next().await {
+    ///     match event {
+    ///         RefineEvent::IterationComplete { iteration, score, .. } => {
+    ///             println!("Iteration {}: score {:.2}", iteration, score);
+    ///         }
+    ///         RefineEvent::Complete(result) => {
+    ///             println!("Done: {}", result.output);
+    ///         }
+    ///         _ => {}
+    ///     }
+    /// }
+    /// ```
+    pub fn run_stream(self) -> impl futures::stream::Stream<Item = RefineEvent> + 'a {
+        async_stream::stream! {
+            use crate::recursive::rewrite::extract_code;
+
+            let max_iterations = self.config.max_iterations;
+            let target_score = self.config.target_score;
+
+            let prompt = if self.config.chain_of_thought {
+                format!(
+                    "{}\n\nLet's think step by step. First, analyze the problem, then provide the solution.",
+                    self.prompt
+                )
+            } else {
+                self.prompt.to_string()
+            };
+
+            let context_id = ContextId::new();
+            let start_time = Instant::now();
+            let mut best_output = String::new();
+            let mut best_score = 0.0f64;
+            let mut feedback: Option<String> = None;
+            let mut total_tokens: u32 = 0;
+            let mut history: SmallVec<[Iteration; 8]> = SmallVec::new();
+
+            for iteration in 0..max_iterations {
+                yield RefineEvent::IterationStart { iteration };
+
+                // Apply formatter
+                let effective_prompt = self.formatter.format(&prompt, feedback.as_deref(), iteration);
+
+                // Generate
+                let result = match self.llm.generate(&effective_prompt, "", feedback.as_deref()).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        yield RefineEvent::Error(e.to_string());
+                        return;
+                    }
+                };
+
+                total_tokens = total_tokens.saturating_add(result.prompt_tokens + result.completion_tokens);
+
+                // Extract code if configured
+                let output = if let Some(ref lang) = self.config.extract_lang {
+                    extract_code(&result.text, lang)
+                        .map(|s| s.to_string())
+                        .unwrap_or(result.text)
+                } else {
+                    result.text
+                };
+
+                // Validate
+                let score = self.validator.validate(&output);
+                let effective_score = score.value;
+                let fb_str = score.feedback_str().map(|s| s.to_string());
+
+                history.push(Iteration {
+                    number: iteration,
+                    output: output.clone(),
+                    score: effective_score,
+                    feedback: fb_str.clone(),
+                });
+
+                if effective_score > best_score {
+                    best_score = effective_score;
+                    best_output = output.clone();
+                }
+
+                yield RefineEvent::IterationComplete {
+                    iteration,
+                    score: effective_score,
+                    output: output.clone(),
+                    feedback: fb_str.clone(),
+                };
+
+                // Check for success
+                if effective_score >= target_score - f64::EPSILON {
+                    yield RefineEvent::Complete(Box::new(RefineResult {
+                        output,
+                        score: effective_score,
+                        iterations: iteration + 1,
+                        context_id,
+                        from_cache: false,
+                        prompt: None,
+                        history,
+                        corrections: SmallVec::new(),
+                        cli_captures: SmallVec::new(),
+                        stop_reason: StopReason::TargetReached,
+                        total_tokens,
+                        elapsed: start_time.elapsed(),
+                        confidence: 1.0,
+                    }));
+                    return;
+                }
+
+                // Prepare feedback for next iteration
+                feedback = Some(format!(
+                    "Your previous output scored {:.2}/1.0. {}",
+                    effective_score,
+                    fb_str.as_deref().unwrap_or("Please improve.")
+                ));
+            }
+
+            // Max iterations reached
+            yield RefineEvent::Complete(Box::new(RefineResult {
+                output: best_output,
+                score: best_score,
+                iterations: history.len() as u32,
+                context_id,
+                from_cache: false,
+                prompt: None,
+                history,
+                corrections: SmallVec::new(),
+                cli_captures: SmallVec::new(),
+                stop_reason: StopReason::MaxIterations,
+                total_tokens,
+                elapsed: start_time.elapsed(),
+                confidence: 1.0,
+            }));
+        }
     }
 
     /// Execute the refinement asynchronously.
     pub async fn run(mut self) -> Result<RefineResult> {
+        #[cfg(feature = "tracing")]
+        let _span = tracing::info_span!(
+            "refine",
+            max_iter = self.config.max_iterations,
+            target = self.config.target_score,
+        )
+        .entered();
+
         let context_id = ContextId::new();
         let mut history: SmallVec<[Iteration; 8]> = SmallVec::new();
         let mut corrections: SmallVec<[Correction; 8]> = SmallVec::new();
@@ -457,17 +697,22 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
                 }
             }
 
+            // Apply formatter to transform prompt for this iteration
+            let effective_prompt = self
+                .formatter
+                .format(&prompt, feedback.as_deref(), iteration);
+
             // Generate output (with best_of sampling)
             let (output, gen_score, tokens_used) = if self.best_of > 1 {
                 let (out, score) = self
-                    .generate_best_of(&prompt, &context, feedback.as_deref())
+                    .generate_best_of(&effective_prompt, &context, feedback.as_deref())
                     .await?;
                 // For best_of, we estimate tokens (actual tracking would need refactoring)
                 (out, score, 0u32)
             } else {
                 let result = self
                     .llm
-                    .generate(&prompt, &context, feedback.as_deref())
+                    .generate(&effective_prompt, &context, feedback.as_deref())
                     .await?;
                 let tokens = result.prompt_tokens + result.completion_tokens;
                 (result.text, 0.0, tokens)
@@ -485,19 +730,22 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
             }
 
             // Extract code from markdown if configured
-            let text_to_validate =
-                if let (Some(_md), Some(lang)) = (self.source_markdown, self.source_lang) {
-                    // Replace code in markdown and extract
-                    let full_output = format!("```{}\n{}\n```", lang, output);
-                    extract_code(&full_output, lang)
-                        .map(|s| s.to_string())
-                        .unwrap_or(output.clone())
-                } else {
-                    output.clone()
-                };
+            let output = if let (Some(_md), Some(lang)) = (self.source_markdown, self.source_lang) {
+                // Replace code in markdown and extract
+                let full_output = format!("```{}\n{}\n```", lang, output);
+                extract_code(&full_output, lang)
+                    .map(|s| s.to_string())
+                    .unwrap_or(output)
+            } else if let Some(ref lang) = self.config.extract_lang {
+                extract_code(&output, lang)
+                    .map(|s| s.to_string())
+                    .unwrap_or(output)
+            } else {
+                output
+            };
 
             // Validate
-            let score = self.validator.validate(&text_to_validate);
+            let score = self.validator.validate(&output);
 
             // Track confidence (use the best confidence seen for the best output)
             if score.value > best_score {
@@ -525,6 +773,9 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
                 score: effective_score,
                 feedback: score.feedback_str().map(|s| s.to_string()),
             });
+
+            #[cfg(feature = "tracing")]
+            tracing::info!(iteration, score = effective_score, "refine iteration");
 
             // Call iteration callback
             if let Some(ref callback) = self.on_iter {
@@ -653,6 +904,15 @@ impl<'a, L: Llm, V: Validate> Refine<'a, L, V> {
             }
         }
 
+        #[cfg(feature = "tracing")]
+        tracing::info!(
+            score = best_score,
+            iterations = history.len(),
+            stop_reason = ?stop_reason,
+            tokens = total_tokens,
+            "refine complete"
+        );
+
         Ok(RefineResult {
             output: best_output,
             score: best_score,
@@ -757,8 +1017,8 @@ mod tests {
     fn test_simple_refine() {
         let llm = MockLlm::new(|_, _| "fn add(a: i32, b: i32) -> i32 { a + b }".to_string());
 
-        let result = refine(&llm, "Write an add function").go();
-        assert!(result.contains("fn add"));
+        let result = refine(&llm, "Write an add function").go().unwrap();
+        assert!(result.output.contains("fn add"));
     }
 
     #[test]
@@ -771,13 +1031,14 @@ mod tests {
 
         let validator = checks().require("fn ").require("->").require(": i32");
 
-        let (output, score) = refine(&llm, "Write an add function")
+        let result = refine(&llm, "Write an add function")
             .validate(validator)
             .max_iter(5)
-            .go_scored();
+            .go()
+            .unwrap();
 
-        assert!(output.contains("-> i32"));
-        assert!((score - 1.0).abs() < f64::EPSILON);
+        assert!(result.output.contains("-> i32"));
+        assert!((result.score - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -787,9 +1048,10 @@ mod tests {
         let result = refine(&llm, "test")
             .example("input1", "output1")
             .example("input2", "output2")
-            .go();
+            .go()
+            .unwrap();
 
-        assert_eq!(result, "result");
+        assert_eq!(result.output, "result");
     }
 
     #[test]
@@ -807,7 +1069,7 @@ mod tests {
         let result = refine(&llm, "Write a function")
             .validate(validator)
             .max_iter(5)
-            .go_full()
+            .go()
             .unwrap();
 
         assert_eq!(result.iterations, 3);
@@ -880,8 +1142,8 @@ mod tests {
             }
         });
 
-        let result = refine(&llm, "solve this").chain_of_thought().go();
-        assert_eq!(result, "thought through");
+        let result = refine(&llm, "solve this").with_reasoning().go().unwrap();
+        assert_eq!(result.output, "thought through");
     }
 
     #[test]
@@ -894,7 +1156,7 @@ mod tests {
             .validate(validator)
             .max_iter(10)
             .stop_on_plateau(3)
-            .go_full()
+            .go()
             .unwrap();
 
         // Should stop after 3 iterations of no improvement
@@ -914,7 +1176,7 @@ mod tests {
             .validate(validator)
             .with_budget(100)
             .max_iter(10)
-            .go_full()
+            .go()
             .unwrap();
 
         // Budget tracking is set (tokens may be 0 for mock)
@@ -928,7 +1190,7 @@ mod tests {
         let result = refine(&llm, "test")
             .with_timeout(Duration::from_secs(60))
             .max_iter(3)
-            .go_full()
+            .go()
             .unwrap();
 
         // Should complete within timeout
@@ -943,7 +1205,7 @@ mod tests {
         let result = refine(&llm, "test")
             .validate(validator)
             .max_iter(5)
-            .go_full()
+            .go()
             .unwrap();
 
         assert_eq!(result.stop_reason, StopReason::TargetReached);
@@ -958,7 +1220,7 @@ mod tests {
         let result = refine(&llm, "test")
             .validate(validator)
             .max_iter(3)
-            .go_full()
+            .go()
             .unwrap();
 
         assert_eq!(result.stop_reason, StopReason::MaxIterations);
@@ -974,7 +1236,7 @@ mod tests {
             .validate(validator)
             .max_iter(10)
             .stop_on_plateau(2)
-            .go_full()
+            .go()
             .unwrap();
 
         assert_eq!(result.stop_reason, StopReason::Plateau);
@@ -984,7 +1246,7 @@ mod tests {
     fn test_result_has_elapsed() {
         let llm = MockLlm::new(|_, _| "output".to_string());
 
-        let result = refine(&llm, "test").max_iter(1).go_full().unwrap();
+        let result = refine(&llm, "test").max_iter(1).go().unwrap();
 
         // Elapsed should be non-zero (or at least not negative)
         assert!(result.elapsed >= Duration::ZERO);
@@ -994,7 +1256,7 @@ mod tests {
     fn test_result_has_confidence() {
         let llm = MockLlm::new(|_, _| "output".to_string());
 
-        let result = refine(&llm, "test").max_iter(1).go_full().unwrap();
+        let result = refine(&llm, "test").max_iter(1).go().unwrap();
 
         // Default confidence is 1.0 for deterministic validators
         assert!((result.confidence - 1.0).abs() < f64::EPSILON);
@@ -1026,7 +1288,7 @@ mod tests {
             .adaptive()
             .min_iter(2)
             .max_iter(5)
-            .go_full()
+            .go()
             .unwrap();
 
         // Should have run at least min_iter iterations
@@ -1044,7 +1306,7 @@ mod tests {
             .min_iter(2)
             .max_iter(10)
             .early_exit_on_stagnation(3)
-            .go_full()
+            .go()
             .unwrap();
 
         // Should exit early due to stagnation
@@ -1080,7 +1342,7 @@ mod tests {
             .max_iter(3)
             .extend_on_progress(2)
             .target(1.0) // Unreachable target
-            .go_full()
+            .go()
             .unwrap();
 
         // With extension, should exceed original max_iter of 3
@@ -1115,10 +1377,80 @@ mod tests {
             .min_iter(5)
             .max_iter(10)
             .early_exit_on_stagnation(1) // Very aggressive early exit
-            .go_full()
+            .go()
             .unwrap();
 
         // Should still run min_iter (5) iterations despite early exit trigger
         assert!(result.iterations >= 5);
+    }
+
+    #[tokio::test]
+    async fn test_run_stream_events() {
+        use futures::stream::StreamExt;
+
+        let llm = IterativeMockLlm::new(|iter, _, _| match iter {
+            0 => "fn foo() {}".to_string(),
+            1 => "fn foo() -> i32 { 42 }".to_string(),
+            _ => "fn foo() -> i32 { 42 }".to_string(),
+        });
+
+        let validator = checks().require("fn ").require("-> i32");
+
+        let stream = refine(&llm, "Write a function")
+            .validate(validator)
+            .max_iter(5)
+            .run_stream();
+        tokio::pin!(stream);
+
+        let mut starts = 0u32;
+        let mut completes = 0u32;
+        let mut final_result = None;
+
+        while let Some(event) = stream.next().await {
+            match event {
+                RefineEvent::IterationStart { .. } => starts += 1,
+                RefineEvent::IterationComplete { .. } => completes += 1,
+                RefineEvent::Complete(result) => {
+                    final_result = Some(result);
+                }
+                RefineEvent::Error(_) => panic!("Unexpected error event"),
+            }
+        }
+
+        assert!(starts >= 2, "Should have at least 2 iteration starts");
+        assert_eq!(starts, completes, "Starts and completes should match");
+        let result = final_result.expect("Should have a Complete event");
+        assert!(result.output.contains("-> i32"));
+        assert!((result.score - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_run_stream_with_formatter() {
+        use crate::recursive::formatter::FeedbackFormatter;
+        use futures::stream::StreamExt;
+
+        let llm = IterativeMockLlm::new(|iter, _, _| match iter {
+            0 => "attempt 1".to_string(),
+            _ => "fn correct() -> i32 { 1 }".to_string(),
+        });
+
+        let validator = checks().require("fn ").require("-> i32");
+        let formatter = FeedbackFormatter;
+
+        let stream = refine(&llm, "Write a function")
+            .validate(validator)
+            .with_formatter(formatter)
+            .max_iter(3)
+            .run_stream();
+        tokio::pin!(stream);
+
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event);
+        }
+
+        // Should have start/complete pairs and a final Complete
+        assert!(events.len() >= 5); // 2 starts + 2 completes + 1 Complete
+        assert!(matches!(events.last(), Some(RefineEvent::Complete(_))));
     }
 }

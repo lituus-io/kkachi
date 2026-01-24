@@ -1,4 +1,4 @@
-name: Publish to crates.io
+name: Release Rust Crate
 
 on:
   push:
@@ -10,99 +10,41 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  publish:
-    name: Publish to crates.io
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-action@stable
-        with:
-          toolchain: stable
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-publish-${{ hashFiles('**/Cargo.toml') }}
-
-      - name: Verify version matches tag
-        run: |
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
-            echo "Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
-            exit 1
-          fi
-
-      - name: Run tests before publish
-        run: cargo test -p kkachi --features storage-bundled
-
-      - name: Publish kkachi (core library)
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          cargo publish -p kkachi --features storage-bundled --allow-dirty
-
-      - name: Wait for crates.io index update
-        run: sleep 30
-
-      - name: Publish kkachi-cache
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p kkachi-cache --allow-dirty
-        continue-on-error: true
-
-      - name: Publish kkachi-client
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p kkachi-client --allow-dirty
-        continue-on-error: true
-
-      - name: Publish kkachi-eval
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p kkachi-eval --allow-dirty
-        continue-on-error: true
-
-      - name: Publish kkachi-refine
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p kkachi-refine --allow-dirty
-        continue-on-error: true
-
-  create-release:
-    name: Create GitHub Release
-    needs: publish
+  release:
+    name: Build and Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-cargo-release-${{ hashFiles('**/Cargo.toml') }}
+
+      - name: Run tests
+        run: cargo test -p kkachi
+
+      - name: Package crate
+        run: cargo package -p kkachi --allow-dirty
+
+      - name: Upload crate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kkachi-crate
+          path: target/package/kkachi-*.crate
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
         with:
           generate_release_notes: true
-          body: |
-            ## Installation
-
-            Add to your `Cargo.toml`:
-            ```toml
-            [dependencies]
-            kkachi = "${{ github.ref_name }}"
-            ```
-
-            For bundled DuckDB (no system dependencies):
-            ```toml
-            [dependencies]
-            kkachi = { version = "${{ github.ref_name }}", features = ["storage-bundled"] }
-            ```
-
-            ## Changelog
-            See the [full changelog](https://github.com/lituus-io/kkachi/compare/...v${{ github.ref_name }}) for details.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: target/package/kkachi-*.crate

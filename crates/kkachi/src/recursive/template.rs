@@ -44,7 +44,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use kkachi::recursive::Template;
 //!
 //! let template = Template::from_str(r#"
@@ -54,7 +54,7 @@
 //!   type: json
 //! ---
 //! Answer questions concisely.
-//! "#)?;
+//! "#).unwrap();
 //!
 //! let prompt = template.assemble_prompt("What is 2+2?", 0, None);
 //! ```
@@ -71,7 +71,6 @@ use crate::error::{Error, Result};
 #[serde(rename_all = "lowercase")]
 pub enum FormatType {
     /// JSON format with optional schema validation.
-    #[default]
     Json,
     /// YAML format with optional schema validation.
     Yaml,
@@ -80,6 +79,7 @@ pub enum FormatType {
     /// XML format.
     Xml,
     /// Plain text (no format enforcement).
+    #[default]
     Plain,
 }
 
@@ -376,7 +376,9 @@ impl<'a> Template<'a> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
+    /// use kkachi::recursive::Template;
+    ///
     /// let template = Template::from_str(r#"
     /// ---
     /// name: qa
@@ -384,16 +386,18 @@ impl<'a> Template<'a> {
     ///   type: json
     /// ---
     /// Answer questions.
-    /// "#)?;
+    /// "#).unwrap();
     /// ```
     pub fn from_str(content: &'a str) -> Result<Self> {
         let content = content.trim();
 
-        // Check for frontmatter
+        // If no frontmatter, treat as plain system prompt with defaults
         if !content.starts_with("---") {
-            return Err(Error::parse(
-                "Template must start with YAML frontmatter (---)",
-            ));
+            return Ok(Self {
+                name: Cow::Borrowed("inline"),
+                system_prompt: Cow::Borrowed(content),
+                ..Default::default()
+            });
         }
 
         // Find the end of frontmatter
@@ -480,11 +484,13 @@ impl<'a> Template<'a> {
     fn parse_owned(content: &str) -> Result<Template<'static>> {
         let content = content.trim();
 
-        // Check for frontmatter
+        // If no frontmatter, treat as plain system prompt with defaults
         if !content.starts_with("---") {
-            return Err(Error::parse(
-                "Template must start with YAML frontmatter (---)",
-            ));
+            return Ok(Template {
+                name: Cow::Owned("inline".to_string()),
+                system_prompt: Cow::Owned(content.to_string()),
+                ..Default::default()
+            });
         }
 
         // Find the end of frontmatter
@@ -1265,7 +1271,7 @@ Generate YAML output.
     #[test]
     fn test_format_type_default() {
         let format = FormatSpec::default();
-        assert_eq!(format.format_type, FormatType::Json);
+        assert_eq!(format.format_type, FormatType::Plain);
     }
 
     #[test]

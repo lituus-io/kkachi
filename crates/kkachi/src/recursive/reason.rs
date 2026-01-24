@@ -55,6 +55,8 @@ pub struct ReasonConfig {
     pub target: f64,
     /// Custom CoT instruction (replaces default "Let's think step by step").
     pub instruction: Option<&'static str>,
+    /// Extract code blocks in this language before validation.
+    pub extract_lang: Option<String>,
 }
 
 impl Default for ReasonConfig {
@@ -65,6 +67,7 @@ impl Default for ReasonConfig {
             max_iter: 5,
             target: 1.0,
             instruction: None,
+            extract_lang: None,
         }
     }
 }
@@ -137,6 +140,14 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
         self
     }
 
+    /// Extract code blocks in the given language before validation.
+    ///
+    /// When set, the validator receives extracted code instead of the raw answer.
+    pub fn extract(mut self, lang: impl Into<String>) -> Self {
+        self.config.extract_lang = Some(lang.into());
+        self
+    }
+
     /// Disable reasoning inclusion in result.
     pub fn no_reasoning(mut self) -> Self {
         self.config.include_reasoning = false;
@@ -154,7 +165,7 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
         let mut total_tokens = 0u32;
         let mut last_score = Score::pass();
         let mut last_reasoning: Option<String> = None;
-        let mut last_answer = String::new();
+        let mut last_output = String::new();
 
         for iter in 0..self.config.max_iter {
             iterations = iter + 1;
@@ -191,10 +202,19 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
             } else {
                 None
             };
-            last_answer = answer.clone();
 
-            // Validate the answer (not the full response)
-            last_score = self.validator.validate(&answer);
+            // Extract code if configured — use extracted code as the output.
+            // Try the answer first, then the full response (code may be in reasoning).
+            last_output = if let Some(ref lang) = self.config.extract_lang {
+                use crate::recursive::rewrite::extract_code;
+                extract_code(&answer, lang)
+                    .or_else(|| extract_code(&output.text, lang))
+                    .map(|s| s.to_string())
+                    .unwrap_or(answer.clone())
+            } else {
+                answer.clone()
+            };
+            last_score = self.validator.validate(&last_output);
 
             // Check if we've reached the target
             if last_score.value >= self.config.target {
@@ -203,7 +223,7 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
         }
 
         ReasonResult {
-            output: last_answer,
+            output: last_output,
             reasoning: last_reasoning,
             score: last_score.value,
             iterations,
@@ -415,5 +435,30 @@ mod tests {
         assert_eq!(builder.config.reasoning_field, "thought");
         assert_eq!(builder.config.max_iter, 10);
         assert!((builder.config.target - 0.8).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_reason_extract_applies_to_output() {
+        // Simulates real LLM behavior: code is in the reasoning section,
+        // answer marker just says "see above"
+        let llm = MockLlm::new(|_, _| {
+            "I need to write hello world.\n\
+             Here is the code:\n\
+             ```python\n\
+             print(\"hello\")\n\
+             ```\n\n\
+             Therefore: The code above prints hello"
+                .to_string()
+        });
+
+        let result = reason(&llm, "Write hello world in Python")
+            .extract("python")
+            .go();
+
+        // The output should be the extracted code from the full response,
+        // not the raw answer text ("The code above prints hello")
+        assert_eq!(result.output.trim(), "print(\"hello\")");
+        assert!(!result.output.contains("```"));
+        assert!(!result.output.contains("The code above"));
     }
 }

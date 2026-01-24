@@ -174,7 +174,7 @@ impl PyRefineBuilder {
                 .validate(cli.clone())
                 .max_iter(self.max_iterations)
                 .target(self.score_threshold)
-                .go_full()
+                .go()
         } else if !self.require_patterns.is_empty()
             || !self.forbid_patterns.is_empty()
             || self.min_length.is_some()
@@ -185,13 +185,13 @@ impl PyRefineBuilder {
                 .validate(check_builder)
                 .max_iter(self.max_iterations)
                 .target(self.score_threshold)
-                .go_full()
+                .go()
         } else {
             // No validation
             refine(&llm, &self.prompt)
                 .max_iter(self.max_iterations)
                 .target(self.score_threshold)
-                .go_full()
+                .go()
         };
 
         match result {

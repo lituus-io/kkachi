@@ -23,12 +23,12 @@
 //! let result = refine(&llm, "question -> code")
 //!     .validate(validator)
 //!     .max_iter(5)
-//!     .go();
+//!     .go()?;
 //! ```
 
 // Jinja template support
 pub mod jinja;
-pub use jinja::JinjaTemplate;
+pub use jinja::{JinjaFormatter, JinjaTemplate};
 
 // Re-export minijinja::Value for template rendering
 pub use minijinja::Value as JinjaValue;

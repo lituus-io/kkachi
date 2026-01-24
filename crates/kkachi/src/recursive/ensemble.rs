@@ -14,7 +14,7 @@
 //!
 //! let llm = MockLlm::new(|_, _| "Paris".to_string());
 //!
-//! let result = ensemble(&llm, "What is the capital of France?", 5)
+//! let result = ensemble(&llm, "What is the capital of France?").n(5)
 //!     .aggregate(Aggregate::MajorityVote)
 //!     .go();
 //!
@@ -37,14 +37,10 @@ use std::collections::HashMap;
 ///
 /// let llm = MockLlm::new(|_, _| "42".to_string());
 ///
-/// let result = ensemble(&llm, "What is the answer?", 3).go();
+/// let result = ensemble(&llm, "What is the answer?").go();
 /// ```
-pub fn ensemble<'a, L: Llm>(
-    llm: &'a L,
-    prompt: &'a str,
-    n: usize,
-) -> Ensemble<'a, L, NoValidation> {
-    Ensemble::new(llm, prompt, n)
+pub fn ensemble<'a, L: Llm>(llm: &'a L, prompt: &'a str) -> Ensemble<'a, L, NoValidation> {
+    Ensemble::new(llm, prompt)
 }
 
 /// Aggregation strategy for combining multiple responses.
@@ -72,6 +68,12 @@ pub struct EnsembleConfig {
     pub normalize: bool,
     /// Minimum agreement ratio to consider result valid.
     pub min_agreement: f64,
+    /// Whether to inject diversity hints for each chain.
+    pub diverse: bool,
+    /// Language to extract from code fences before validation (e.g., "rust").
+    pub extract_lang: Option<String>,
+    /// Whether to generate chains in parallel using threads.
+    pub parallel: bool,
 }
 
 impl Default for EnsembleConfig {
@@ -80,6 +82,9 @@ impl Default for EnsembleConfig {
             with_reasoning: false,
             normalize: true,
             min_agreement: 0.0,
+            diverse: true,
+            extract_lang: None,
+            parallel: false,
         }
     }
 }
@@ -97,12 +102,12 @@ pub struct Ensemble<'a, L: Llm, V: Validate> {
 }
 
 impl<'a, L: Llm> Ensemble<'a, L, NoValidation> {
-    /// Create a new ensemble builder.
-    pub fn new(llm: &'a L, prompt: &'a str, n: usize) -> Self {
+    /// Create a new ensemble builder with default N=3.
+    pub fn new(llm: &'a L, prompt: &'a str) -> Self {
         Self {
             llm,
             prompt,
-            n: n.max(1),
+            n: 3,
             validator: NoValidation,
             aggregate: Aggregate::default(),
             config: EnsembleConfig::default(),
@@ -111,6 +116,12 @@ impl<'a, L: Llm> Ensemble<'a, L, NoValidation> {
 }
 
 impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
+    /// Set the number of chains to generate (default: 3).
+    pub fn n(mut self, n: usize) -> Self {
+        self.n = n.max(1);
+        self
+    }
+
     /// Set a validator for responses.
     pub fn validate<V2: Validate>(self, validator: V2) -> Ensemble<'a, L, V2> {
         Ensemble {
@@ -153,12 +164,71 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
         self
     }
 
+    /// Disable diversity hints between chains.
+    pub fn no_diversity(mut self) -> Self {
+        self.config.diverse = false;
+        self
+    }
+
+    /// Enable diversity hints between chains (the default).
+    ///
+    /// Use this to explicitly re-enable diversity after `.no_diversity()`.
+    pub fn diverse(mut self) -> Self {
+        self.config.diverse = true;
+        self
+    }
+
+    /// Generate chains in parallel using threads.
+    ///
+    /// When enabled, all N chains are generated concurrently using
+    /// `std::thread::scope`.
+    pub fn parallel(mut self) -> Self {
+        self.config.parallel = true;
+        self
+    }
+
+    /// Extract code from markdown fences before validation/comparison.
+    pub fn extract(mut self, lang: impl Into<String>) -> Self {
+        self.config.extract_lang = Some(lang.into());
+        self
+    }
+
     /// Execute synchronously and return the result.
+    #[cfg(feature = "native")]
+    pub fn go(self) -> EnsembleResult {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.run()))
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime")
+                .block_on(self.run())
+        }
+    }
+
+    /// Execute synchronously and return the result (fallback without tokio).
+    #[cfg(not(feature = "native"))]
     pub fn go(self) -> EnsembleResult {
         futures::executor::block_on(self.run())
     }
 
     /// Execute synchronously and return result with consensus pool.
+    #[cfg(feature = "native")]
+    pub fn go_with_consensus(self) -> (EnsembleResult, ConsensusPool) {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.run_with_consensus()))
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime")
+                .block_on(self.run_with_consensus())
+        }
+    }
+
+    /// Execute synchronously and return result with consensus pool (fallback).
+    #[cfg(not(feature = "native"))]
     pub fn go_with_consensus(self) -> (EnsembleResult, ConsensusPool) {
         futures::executor::block_on(self.run_with_consensus())
     }
@@ -171,6 +241,10 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
 
     /// Execute asynchronously with consensus pool.
     pub async fn run_with_consensus(self) -> (EnsembleResult, ConsensusPool) {
+        #[cfg(feature = "tracing")]
+        let _span =
+            tracing::info_span!("ensemble", n = self.n, aggregate = ?self.aggregate).entered();
+
         let mut chains: SmallVec<[ChainResult; 8]> = SmallVec::new();
         let mut total_tokens = 0u32;
         let mut error: Option<String> = None;
@@ -181,34 +255,122 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
             self.prompt.to_string()
         };
 
-        // Generate N responses
-        for i in 0..self.n {
-            let output = match self.llm.generate(&prompt, "", None).await {
-                Ok(out) => out,
-                Err(e) => {
-                    error = Some(e.to_string());
-                    continue;
-                }
-            };
+        if self.config.parallel {
+            // Parallel mode: generate all chains concurrently using FuturesUnordered
+            use futures::stream::{FuturesUnordered, StreamExt};
 
-            total_tokens += output.prompt_tokens + output.completion_tokens;
+            let contexts: Vec<String> = (0..self.n)
+                .map(|i| {
+                    if self.config.diverse && self.n > 1 {
+                        format!(
+                            "Response {} of {}. Provide your independent answer.",
+                            i + 1,
+                            self.n
+                        )
+                    } else {
+                        String::new()
+                    }
+                })
+                .collect();
 
-            let raw_answer = output.text.clone();
-            let normalized = if self.config.normalize {
-                Self::normalize_answer(&raw_answer)
-            } else {
-                raw_answer.clone()
-            };
+            let mut futs = FuturesUnordered::new();
+            for (i, ctx) in contexts.iter().enumerate() {
+                let fut = self.llm.generate(&prompt, ctx, None);
+                futs.push(async move { (i, fut.await) });
+            }
 
-            let validator_score = self.validator.validate(&raw_answer);
+            let mut outputs: Vec<(usize, crate::error::Result<crate::recursive::llm::LmOutput>)> =
+                Vec::with_capacity(self.n);
+            while let Some(result) = futs.next().await {
+                outputs.push(result);
+            }
 
-            chains.push(ChainResult {
-                index: i,
-                raw_answer,
-                normalized_answer: normalized,
-                validator_score: validator_score.value,
-                agrees_with_majority: false, // Will be set later
-            });
+            for (i, result) in outputs {
+                let output = match result {
+                    Ok(out) => out,
+                    Err(e) => {
+                        error = Some(e.to_string());
+                        continue;
+                    }
+                };
+
+                total_tokens += output.prompt_tokens + output.completion_tokens;
+
+                let raw_answer = if let Some(ref lang) = self.config.extract_lang {
+                    use crate::recursive::rewrite::extract_code;
+                    extract_code(&output.text, lang)
+                        .map(|s| s.to_string())
+                        .unwrap_or(output.text)
+                } else {
+                    output.text
+                };
+
+                let normalized = if self.config.normalize {
+                    Self::normalize_answer(&raw_answer)
+                } else {
+                    raw_answer.clone()
+                };
+
+                let validator_score = self.validator.validate(&raw_answer);
+
+                chains.push(ChainResult {
+                    index: i,
+                    raw_answer,
+                    normalized_answer: normalized,
+                    validator_score: validator_score.value,
+                    agrees_with_majority: false,
+                });
+            }
+        } else {
+            // Sequential mode: generate chains one at a time
+            for i in 0..self.n {
+                // Build diversity context for this chain
+                let context = if self.config.diverse && self.n > 1 {
+                    format!(
+                        "Response {} of {}. Provide your independent answer.",
+                        i + 1,
+                        self.n
+                    )
+                } else {
+                    String::new()
+                };
+
+                let output = match self.llm.generate(&prompt, &context, None).await {
+                    Ok(out) => out,
+                    Err(e) => {
+                        error = Some(e.to_string());
+                        continue;
+                    }
+                };
+
+                total_tokens += output.prompt_tokens + output.completion_tokens;
+
+                // Extract code from markdown if configured
+                let raw_answer = if let Some(ref lang) = self.config.extract_lang {
+                    use crate::recursive::rewrite::extract_code;
+                    extract_code(&output.text, lang)
+                        .map(|s| s.to_string())
+                        .unwrap_or(output.text)
+                } else {
+                    output.text
+                };
+
+                let normalized = if self.config.normalize {
+                    Self::normalize_answer(&raw_answer)
+                } else {
+                    raw_answer.clone()
+                };
+
+                let validator_score = self.validator.validate(&raw_answer);
+
+                chains.push(ChainResult {
+                    index: i,
+                    raw_answer,
+                    normalized_answer: normalized,
+                    validator_score: validator_score.value,
+                    agrees_with_majority: false, // Will be set later
+                });
+            }
         }
 
         if chains.is_empty() {
@@ -316,6 +478,14 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
             selected_answer: selected.clone(),
             total_tokens,
         };
+
+        #[cfg(feature = "tracing")]
+        tracing::info!(
+            chains = self.n,
+            agreement = agreement_ratio,
+            tokens = total_tokens,
+            "ensemble complete"
+        );
 
         (
             EnsembleResult {
@@ -460,7 +630,7 @@ mod tests {
             }
         });
 
-        let result = ensemble(&llm, "Capital of France?", 3)
+        let result = ensemble(&llm, "Capital of France?")
             .aggregate(Aggregate::MajorityVote)
             .go();
 
@@ -472,7 +642,7 @@ mod tests {
     fn test_ensemble_with_consensus() {
         let llm = MockLlm::new(|_, _| "42".to_string());
 
-        let (result, pool) = ensemble(&llm, "Answer?", 5).go_with_consensus();
+        let (result, pool) = ensemble(&llm, "Answer?").n(5).go_with_consensus();
 
         assert_eq!(result.chains_generated, 5);
         assert!(pool.has_unanimous_agreement());
@@ -492,7 +662,7 @@ mod tests {
             }
         });
 
-        let result = ensemble(&llm, "Answer", 3)
+        let result = ensemble(&llm, "Answer")
             .aggregate(Aggregate::LongestAnswer)
             .go();
 
@@ -507,7 +677,7 @@ mod tests {
             if n < 2 { "same" } else { "different" }.to_string()
         });
 
-        let result = ensemble(&llm, "Answer", 3)
+        let result = ensemble(&llm, "Answer")
             .aggregate(Aggregate::Unanimous)
             .go();
 
@@ -528,7 +698,7 @@ mod tests {
             }
         });
 
-        let (result, pool) = ensemble(&llm, "Capital?", 3).go_with_consensus();
+        let (result, pool) = ensemble(&llm, "Capital?").go_with_consensus();
 
         // All should be treated as same answer after normalization
         assert!(pool.has_unanimous_agreement());
@@ -548,7 +718,7 @@ mod tests {
             }
         });
 
-        let (_, pool) = ensemble(&llm, "Capital?", 3)
+        let (_, pool) = ensemble(&llm, "Capital?")
             .no_normalize()
             .go_with_consensus();
 
@@ -560,7 +730,7 @@ mod tests {
     fn test_consensus_pool_methods() {
         let llm = MockLlm::new(|_, _| "test".to_string());
 
-        let (_, pool) = ensemble(&llm, "Test", 3).go_with_consensus();
+        let (_, pool) = ensemble(&llm, "Test").go_with_consensus();
 
         assert_eq!(pool.chains().len(), 3);
         assert_eq!(pool.selected(), "test");

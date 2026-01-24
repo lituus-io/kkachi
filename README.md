@@ -59,7 +59,7 @@ let llm = IterativeMockLlm::new(|iter, _, _| match iter {
 let result = refine(&llm, "Write a hello world program")
     .validate(validator)
     .max_iter(5)
-    .go_full()?;
+    .go()?;
 
 println!("Score: {:.0}%, Iterations: {}", result.score * 100.0, result.iterations);
 ```
@@ -158,7 +158,7 @@ use kkachi::recursive::{best_of, checks, MockLlm};
 
 let llm = MockLlm::new(|_, _| "A haiku about code\nCompiler speaks in errors\nBugs fade with the dawn".to_string());
 
-let (result, pool) = best_of(&llm, "Write a haiku about programming", 5)
+let (result, pool) = best_of(&llm, "Write a haiku about programming").n(5)
     .score_with(|output| {
         let lines: Vec<_> = output.lines().collect();
         if lines.len() == 3 { 1.0 } else { 0.0 }
@@ -182,7 +182,7 @@ use kkachi::recursive::{ensemble, Aggregate, MockLlm};
 
 let llm = MockLlm::new(|_, _| "Paris".to_string());
 
-let (result, consensus) = ensemble(&llm, "What is the capital of France?", 7)
+let (result, consensus) = ensemble(&llm, "What is the capital of France?").n(7)
     .aggregate(Aggregate::MajorityVote)
     .go_with_consensus();
 
@@ -293,7 +293,7 @@ let result = refine(&llm, "Write a config reader")
     .validate(checks().require("fn ").require("Result").forbid(".unwrap()"))
     .max_iter(5)
     .learn_above(0.8)
-    .go_full()?;
+    .go()?;
 ```
 
 ### Markdown Rewriting
@@ -319,8 +319,8 @@ let updated = rewrite(markdown)
 |----------|-------------|
 | `refine(llm, prompt)` | Iterative refinement pipeline |
 | `reason(llm, prompt)` | Chain of Thought reasoning |
-| `best_of(llm, prompt, n)` | Best of N candidate selection |
-| `ensemble(llm, prompt, n)` | Multi-chain ensemble voting |
+| `best_of(llm, prompt).n(N)` | Best of N candidate selection |
+| `ensemble(llm, prompt).n(N)` | Multi-chain ensemble voting |
 | `agent(llm, goal)` | ReAct agent with tools |
 | `program(llm, problem)` | Code generation + execution |
 | `checks()` | Pattern-based validator |

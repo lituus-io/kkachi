@@ -9,18 +9,20 @@
 //!
 //! # Examples
 //!
-//! ```rust,ignore
-//! use kkachi::recursive::{MockLlm, program};
-//! use kkachi::recursive::executor::python_executor;
-//! use std::time::Duration;
+//! ```no_run
+//! use kkachi::recursive::{program, cli, CliLlm};
 //!
-//! let llm = MockLlm::new(|_, _| {
-//!     "```python\nprint(2 + 2)\n```".to_string()
-//! });
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let llm = CliLlm::new()?;
 //!
-//! let result = program(&llm, "Calculate 2 + 2")
-//!     .executor(python_executor().timeout(Duration::from_secs(5)))
-//!     .go();
+//!     let result = program(&llm, "Calculate the 10th Fibonacci number")
+//!         .executor(cli("bash").stdin())
+//!         .max_iter(3)
+//!         .go();
+//!
+//!     println!("Output: {}", result.output);
+//!     Ok(())
+//! }
 //! ```
 
 use crate::recursive::executor::CodeExecutor;
@@ -34,15 +36,14 @@ use crate::recursive::validate::{NoValidation, Validate};
 /// # Examples
 ///
 /// ```
-/// use kkachi::recursive::{MockLlm, program};
-/// use kkachi::recursive::executor::bash_executor;
+/// use kkachi::recursive::{MockLlm, program, cli};
 ///
 /// let llm = MockLlm::new(|_, _| "```bash\necho 42\n```".to_string());
 ///
 /// // Build a program executor (call .go() to run)
 /// let builder = program(&llm, "Print 42")
-///     .executor(bash_executor())
-///     .max_attempts(3);
+///     .executor(cli("bash").stdin())
+///     .max_iter(3);
 /// ```
 pub fn program<'a, L: Llm>(llm: &'a L, problem: &'a str) -> Program<'a, L, NoValidation> {
     Program::new(llm, problem)
@@ -52,19 +53,22 @@ pub fn program<'a, L: Llm>(llm: &'a L, problem: &'a str) -> Program<'a, L, NoVal
 #[derive(Clone)]
 pub struct ProgramConfig {
     /// Maximum code generation attempts.
-    pub max_attempts: usize,
+    pub max_iter: u32,
     /// Whether to include the generated code in the result.
     pub include_code: bool,
     /// Target programming language.
     pub language: String,
+    /// Extract code blocks from execution output before validation.
+    pub extract_lang: Option<String>,
 }
 
 impl Default for ProgramConfig {
     fn default() -> Self {
         Self {
-            max_attempts: 3,
+            max_iter: 3,
             include_code: true,
             language: "python".to_string(),
+            extract_lang: None,
         }
     }
 }
@@ -118,8 +122,8 @@ impl<'a, L: Llm, V: Validate> Program<'a, L, V> {
     ///
     /// If execution fails, the LLM will be asked to fix the code up to this
     /// many times.
-    pub fn max_attempts(mut self, n: usize) -> Self {
-        self.config.max_attempts = n.max(1);
+    pub fn max_iter(mut self, n: u32) -> Self {
+        self.config.max_iter = n.max(1);
         self
     }
 
@@ -128,6 +132,16 @@ impl<'a, L: Llm, V: Validate> Program<'a, L, V> {
     /// This is usually auto-detected from the executor but can be overridden.
     pub fn language(mut self, lang: &str) -> Self {
         self.config.language = lang.to_string();
+        self
+    }
+
+    /// Extract code blocks from execution output before validation.
+    ///
+    /// When set, the validator receives extracted code from stdout rather
+    /// than the raw output. The result's `output` field will also contain
+    /// the extracted code.
+    pub fn extract(mut self, lang: impl Into<String>) -> Self {
+        self.config.extract_lang = Some(lang.into());
         self
     }
 
@@ -158,14 +172,14 @@ impl<'a, L: Llm, V: Validate> Program<'a, L, V> {
             }
         };
         // Clone necessary values for the loop since we'll be using self
-        let max_attempts = self.config.max_attempts;
+        let max_iter = self.config.max_iter;
         let include_code = self.config.include_code;
 
         let mut last_error: Option<String> = None;
         let mut last_code = String::new();
         let mut total_tokens = 0u32;
 
-        for attempt in 0..max_attempts {
+        for attempt in 0u32..max_iter {
             // Build the prompt
             let prompt = self.build_prompt(last_error.as_deref());
 
@@ -194,12 +208,22 @@ impl<'a, L: Llm, V: Validate> Program<'a, L, V> {
             let result = executor.execute(code).await;
 
             if result.success {
-                // Validate the output
-                let score = self.validator.validate(result.output());
+                // Extract code from output if configured
+                let output_text = if let Some(ref lang) = self.config.extract_lang {
+                    use crate::recursive::rewrite::extract_code;
+                    extract_code(result.output(), lang)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| result.stdout.trim().to_string())
+                } else {
+                    result.stdout.trim().to_string()
+                };
 
-                if score.value >= 1.0 || attempt == max_attempts - 1 {
+                // Validate the (possibly extracted) output
+                let score = self.validator.validate(&output_text);
+
+                if score.value >= 1.0 || attempt == max_iter - 1 {
                     return ProgramResult {
-                        output: result.stdout.trim().to_string(),
+                        output: output_text,
                         code: if include_code {
                             last_code
                         } else {
@@ -228,7 +252,7 @@ impl<'a, L: Llm, V: Validate> Program<'a, L, V> {
             } else {
                 String::new()
             },
-            attempts: max_attempts,
+            attempts: max_iter,
             tokens: total_tokens,
             success: false,
             error: last_error,
@@ -302,7 +326,7 @@ pub struct ProgramResult {
     /// The generated code (if include_code is true).
     pub code: String,
     /// Number of attempts made.
-    pub attempts: usize,
+    pub attempts: u32,
     /// Total tokens used.
     pub tokens: u32,
     /// Whether execution succeeded.
@@ -389,7 +413,7 @@ mod tests {
 
         let result = program(&llm, "Succeed")
             .executor(bash_executor())
-            .max_attempts(3)
+            .max_iter(3)
             .go();
 
         assert!(result.success);
@@ -413,9 +437,9 @@ mod tests {
     fn test_program_config() {
         let llm = MockLlm::new(|_, _| String::new());
 
-        let builder = program(&llm, "test").max_attempts(5).language("python");
+        let builder = program(&llm, "test").max_iter(5).language("python");
 
-        assert_eq!(builder.config.max_attempts, 5);
+        assert_eq!(builder.config.max_iter, 5);
         assert_eq!(builder.config.language, "python");
     }
 

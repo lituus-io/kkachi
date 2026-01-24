@@ -177,6 +177,19 @@ pub trait Validate: Send + Sync {
     }
 }
 
+/// Blanket implementation for references to validators.
+///
+/// This allows passing `&dyn Validate` or `&V` where `V: Validate` is expected.
+impl<V: Validate + ?Sized> Validate for &V {
+    fn validate(&self, text: &str) -> Score<'static> {
+        (*self).validate(text)
+    }
+
+    fn name(&self) -> &'static str {
+        (*self).name()
+    }
+}
+
 /// A validator that always passes.
 ///
 /// Use this when you want to run the refinement loop without validation,
@@ -221,6 +234,20 @@ impl Validate for AlwaysFail {
 
     fn name(&self) -> &'static str {
         "always_fail"
+    }
+}
+
+// ============================================================================
+// Boxed Validate
+// ============================================================================
+
+impl<'v> Validate for Box<dyn Validate + 'v> {
+    fn validate(&self, text: &str) -> Score<'static> {
+        (**self).validate(text)
+    }
+
+    fn name(&self) -> &'static str {
+        (**self).name()
     }
 }
 

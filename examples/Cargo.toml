@@ -9,47 +9,47 @@ publish = false
 # Examples demonstrating the kkachi recursive refinement API.
 
 [[example]]
-name = "declarative_api"
-path = "declarative_api.rs"
+name = "refine"
+path = "refine.rs"
 
 [[example]]
-name = "cli_driven_pipeline"
-path = "cli_driven_pipeline.rs"
+name = "reason"
+path = "reason.rs"
 
 [[example]]
-name = "continuous_learning"
-path = "continuous_learning.rs"
+name = "best_of"
+path = "best_of.rs"
 
 [[example]]
-name = "cli_recursive_optimization"
-path = "cli_recursive_optimization.rs"
+name = "ensemble"
+path = "ensemble.rs"
 
 [[example]]
-name = "dspy_declarative_pipeline"
-path = "dspy_declarative_pipeline.rs"
+name = "optimize"
+path = "optimize.rs"
 
 [[example]]
-name = "pulumi_declarative"
-path = "pulumi_declarative.rs"
+name = "validators"
+path = "validators.rs"
 
 [[example]]
-name = "pulumi_gcs_rag_optimizer"
-path = "pulumi_gcs_rag_optimizer.rs"
+name = "rate_limit"
+path = "rate_limit.rs"
 
 [[example]]
-name = "rag_recursive_pipeline"
-path = "rag_recursive_pipeline.rs"
+name = "fan_out"
+path = "fan_out.rs"
 
 [[example]]
-name = "rag_recursive_simple"
-path = "rag_recursive_simple.rs"
+name = "pareto"
+path = "pareto.rs"
 
 [features]
 default = []
+api = ["kkachi/api"]
 storage = ["kkachi/storage"]
 storage-bundled = ["kkachi/storage-bundled"]
 
 [dependencies]
-kkachi = { path = "../crates/kkachi" }
-tokio = { version = "1.41", features = ["full", "macros"] }
+kkachi = { path = "../crates/kkachi", features = ["api"] }
 anyhow = "1.0"

@@ -28,6 +28,8 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::recursive::executor::{CodeExecutor, ExecutionResult};
+use crate::recursive::tool::Tool;
 use crate::recursive::validate::{Score, Validate};
 use smallvec::SmallVec;
 use std::io::Write;
@@ -44,7 +46,7 @@ pub fn cli(command: &str) -> Cli {
 }
 
 /// Captured output from a CLI command.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CliCapture {
     /// Stage name.
     pub stage: String,
@@ -117,6 +119,7 @@ pub struct Cli {
     timeout: Duration,
     capture: bool,
     use_stdin: bool,
+    strip_fences: bool,
     /// Captured outputs (populated during validation).
     captures: std::sync::Mutex<SmallVec<[CliCapture; 4]>>,
 }
@@ -133,6 +136,7 @@ impl Clone for Cli {
             timeout: self.timeout,
             capture: self.capture,
             use_stdin: self.use_stdin,
+            strip_fences: self.strip_fences,
             // Create a new empty mutex for the clone
             captures: std::sync::Mutex::new(SmallVec::new()),
         }
@@ -155,6 +159,7 @@ impl Cli {
             timeout: Duration::from_secs(120),
             capture: false,
             use_stdin: false,
+            strip_fences: false,
             captures: std::sync::Mutex::new(SmallVec::new()),
         }
     }
@@ -251,6 +256,19 @@ impl Cli {
         self
     }
 
+    /// Strip markdown code fences from input before passing to CLI.
+    ///
+    /// When enabled, if the input contains fenced code blocks (e.g. ````bash\n...\n````),
+    /// only the inner code is extracted and passed to the CLI command. The language
+    /// is matched against the file extension set via `.ext()`.
+    ///
+    /// This is useful when LLM output wraps code in markdown fences that would
+    /// cause the CLI command to fail.
+    pub fn strip_fences(mut self) -> Self {
+        self.strip_fences = true;
+        self
+    }
+
     /// Get captured outputs after validation.
     pub fn get_captures(&self) -> SmallVec<[CliCapture; 4]> {
         self.captures.lock().unwrap().clone()
@@ -341,6 +359,17 @@ impl Cli {
 
 impl Validate for Cli {
     fn validate(&self, text: &str) -> Score<'static> {
+        // Strip markdown fences if configured
+        let text = if self.strip_fences {
+            use crate::recursive::rewrite::extract_code;
+            extract_code(text, &self.extension)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| text.to_string())
+        } else {
+            text.to_string()
+        };
+        let text: &str = &text;
+
         // Create temp file
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join(format!("kkachi_validate.{}", self.extension));
@@ -417,124 +446,248 @@ impl Validate for Cli {
     }
 }
 
-/// Older-style CLI executor for direct command execution.
+// ============================================================================
+// CodeExecutor: CLI-as-Executor adapter
+// ============================================================================
+
+impl CodeExecutor for Cli {
+    fn language(&self) -> &str {
+        self.stages
+            .first()
+            .map(|s| s.command.as_str())
+            .unwrap_or("bash")
+    }
+
+    fn extension(&self) -> &str {
+        &self.extension
+    }
+
+    fn execute<'a>(
+        &'a self,
+        code: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ExecutionResult> + Send + 'a>> {
+        Box::pin(std::future::ready(self.execute_code(code)))
+    }
+}
+
+impl Cli {
+    /// Execute code through this CLI command, returning an [`ExecutionResult`].
+    ///
+    /// Used by the [`CodeExecutor`] implementation. Pipes code via stdin
+    /// (if enabled) or writes to a temp file, then runs the command.
+    fn execute_code(&self, code: &str) -> ExecutionResult {
+        let start = std::time::Instant::now();
+
+        // Use first stage for execution
+        let stage = match self.stages.first() {
+            Some(s) => s,
+            None => {
+                return ExecutionResult {
+                    stdout: String::new(),
+                    stderr: "No CLI stages configured".to_string(),
+                    success: false,
+                    exit_code: None,
+                    duration: start.elapsed(),
+                };
+            }
+        };
+
+        // Create temp file if not using stdin
+        let temp_file = if !self.use_stdin {
+            let temp_dir = std::env::temp_dir();
+            let file_path = temp_dir.join(format!("kkachi_exec.{}", self.extension));
+            if let Err(e) = std::fs::write(&file_path, code) {
+                return ExecutionResult {
+                    stdout: String::new(),
+                    stderr: format!("Failed to write temp file: {}", e),
+                    success: false,
+                    exit_code: None,
+                    duration: start.elapsed(),
+                };
+            }
+            Some(file_path)
+        } else {
+            None
+        };
+
+        let mut cmd = Command::new(&stage.command);
+        for arg in &stage.args {
+            cmd.arg(arg);
+        }
+
+        if let Some(ref file) = temp_file {
+            cmd.arg(file);
+        } else {
+            cmd.stdin(Stdio::piped());
+        }
+
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        if let Some(ref dir) = self.workdir {
+            cmd.current_dir(dir);
+        }
+
+        if !self.inherit_env {
+            cmd.env_clear();
+        }
+        for (key, value) in &self.env_vars {
+            cmd.env(key, value);
+        }
+        for key in &self.env_passthrough {
+            if let Ok(value) = std::env::var(key) {
+                cmd.env(key, value);
+            }
+        }
+
+        let result = if self.use_stdin {
+            match cmd.spawn() {
+                Ok(mut child) => {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        let _ = stdin.write_all(code.as_bytes());
+                    }
+                    match child.wait_with_output() {
+                        Ok(output) => ExecutionResult {
+                            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                            success: output.status.success(),
+                            exit_code: output.status.code(),
+                            duration: start.elapsed(),
+                        },
+                        Err(e) => ExecutionResult {
+                            stdout: String::new(),
+                            stderr: format!("Failed to wait for '{}': {}", stage.command, e),
+                            success: false,
+                            exit_code: None,
+                            duration: start.elapsed(),
+                        },
+                    }
+                }
+                Err(e) => ExecutionResult {
+                    stdout: String::new(),
+                    stderr: format!("Failed to spawn '{}': {}", stage.command, e),
+                    success: false,
+                    exit_code: None,
+                    duration: start.elapsed(),
+                },
+            }
+        } else {
+            match cmd.output() {
+                Ok(output) => ExecutionResult {
+                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                    success: output.status.success(),
+                    exit_code: output.status.code(),
+                    duration: start.elapsed(),
+                },
+                Err(e) => ExecutionResult {
+                    stdout: String::new(),
+                    stderr: format!("Failed to execute '{}': {}", stage.command, e),
+                    success: false,
+                    exit_code: None,
+                    duration: start.elapsed(),
+                },
+            }
+        };
+
+        // Cleanup temp file
+        if let Some(file) = temp_file {
+            let _ = std::fs::remove_file(file);
+        }
+
+        result
+    }
+}
+
+// ============================================================================
+// CliTool: CLI-as-Tool adapter
+// ============================================================================
+
+/// A CLI command wrapped as an agent-compatible [`Tool`].
 ///
-/// This is a lower-level API for executing commands directly.
-pub struct CliExecutor {
-    timeout: Duration,
-    working_dir: Option<PathBuf>,
-    env_vars: Vec<(String, String)>,
+/// Created via [`Cli::as_tool`]. The tool pipes agent input to the CLI command
+/// via stdin and returns stdout.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use kkachi::recursive::{cli, agent, Llm};
+///
+/// let calc = cli("bc").stdin().as_tool("calculator", "Evaluate math expressions");
+/// let result = agent(&llm, "What is 23 * 47?").tool(&calc).go();
+/// ```
+pub struct CliTool {
+    cli: Cli,
+    tool_name: &'static str,
+    tool_description: &'static str,
 }
 
-impl Default for CliExecutor {
-    fn default() -> Self {
-        Self {
-            timeout: Duration::from_secs(120),
-            working_dir: None,
-            env_vars: Vec::new(),
+impl Cli {
+    /// Convert this CLI builder into an agent tool.
+    ///
+    /// The tool sends the agent's input to the command via stdin and returns
+    /// the command's stdout. Automatically enables stdin mode.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use kkachi::recursive::cli;
+    ///
+    /// let wc = cli("wc").arg("-w").stdin().as_tool("word_count", "Count words");
+    /// ```
+    pub fn as_tool(mut self, name: &'static str, description: &'static str) -> CliTool {
+        self.use_stdin = true;
+        CliTool {
+            cli: self,
+            tool_name: name,
+            tool_description: description,
         }
     }
 }
 
-impl CliExecutor {
-    /// Create a new CLI executor.
-    pub fn new() -> Self {
-        Self::default()
+impl Tool for CliTool {
+    fn name(&self) -> &str {
+        self.tool_name
     }
 
-    /// Set timeout.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
+    fn description(&self) -> &str {
+        self.tool_description
     }
 
-    /// Set working directory.
-    pub fn with_working_dir(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.working_dir = Some(dir.into());
-        self
+    fn execute<'a>(
+        &'a self,
+        input: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(std::future::ready(self.run(input)))
     }
+}
 
-    /// Set environment variables.
-    pub fn with_envs(mut self, vars: Vec<(String, String)>) -> Self {
-        self.env_vars = vars;
-        self
-    }
+impl CliTool {
+    fn run(&self, input: &str) -> Result<String> {
+        // Use the first stage only for tool execution
+        let stage = self
+            .cli
+            .stages
+            .first()
+            .ok_or_else(|| Error::Other("No CLI stages configured".to_string()))?;
 
-    /// Execute a command.
-    pub fn execute(&self, cmd: &str, args: &[&str]) -> Result<CliCapture> {
-        let start = Instant::now();
+        let capture = self
+            .cli
+            .execute_stage(stage, input, std::path::Path::new(""))?;
 
-        let mut command = Command::new(cmd);
-        command
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        if let Some(ref dir) = self.working_dir {
-            command.current_dir(dir);
+        if capture.success {
+            Ok(capture.stdout.trim().to_string())
+        } else {
+            let err = if capture.stderr.is_empty() {
+                format!(
+                    "Command '{}' failed with exit code {:?}",
+                    capture.command, capture.exit_code
+                )
+            } else {
+                capture.stderr.trim().to_string()
+            };
+            Err(Error::Other(err))
         }
-
-        for (key, value) in &self.env_vars {
-            command.env(key, value);
-        }
-
-        let output = command
-            .output()
-            .map_err(|e| Error::Other(format!("Failed to execute '{}': {}", cmd, e)))?;
-
-        Ok(CliCapture {
-            stage: cmd.to_string(),
-            command: format!("{} {}", cmd, args.join(" ")),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            success: output.status.success(),
-            exit_code: output.status.code(),
-            duration_ms: start.elapsed().as_millis() as u64,
-        })
-    }
-
-    /// Execute a command with input piped to stdin.
-    pub fn execute_with_stdin(&self, cmd: &str, args: &[&str], input: &str) -> Result<CliCapture> {
-        let start = Instant::now();
-
-        let mut command = Command::new(cmd);
-        command
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        if let Some(ref dir) = self.working_dir {
-            command.current_dir(dir);
-        }
-
-        for (key, value) in &self.env_vars {
-            command.env(key, value);
-        }
-
-        let mut child = command
-            .spawn()
-            .map_err(|e| Error::Other(format!("Failed to spawn '{}': {}", cmd, e)))?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(input.as_bytes())
-                .map_err(|e| Error::Other(format!("Failed to write to stdin: {}", e)))?;
-        }
-
-        let output = child
-            .wait_with_output()
-            .map_err(|e| Error::Other(format!("Failed to wait for '{}': {}", cmd, e)))?;
-
-        Ok(CliCapture {
-            stage: cmd.to_string(),
-            command: format!("{} {}", cmd, args.join(" ")),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-            success: output.status.success(),
-            exit_code: output.status.code(),
-            duration_ms: start.elapsed().as_millis() as u64,
-        })
     }
 }
 
@@ -603,22 +756,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_executor() {
-        let exec = CliExecutor::new();
-        let result = exec.execute("echo", &["test"]).unwrap();
-        assert!(result.success);
-        assert!(result.stdout.contains("test"));
-    }
-
-    #[test]
-    fn test_cli_executor_stdin() {
-        let exec = CliExecutor::new();
-        let result = exec.execute_with_stdin("cat", &[], "hello world").unwrap();
-        assert!(result.success);
-        assert_eq!(result.stdout.trim(), "hello world");
-    }
-
-    #[test]
     fn test_cli_capture_errors() {
         let capture = CliCapture {
             stage: "test".to_string(),
@@ -641,5 +778,28 @@ mod tests {
 
         let score = c.validate("test");
         assert!(score.is_perfect());
+    }
+
+    #[test]
+    fn test_cli_as_tool() {
+        let tool = cli("echo")
+            .arg("hello")
+            .stdin()
+            .as_tool("echo_tool", "Echoes hello");
+
+        assert_eq!(tool.name(), "echo_tool");
+        assert_eq!(tool.description(), "Echoes hello");
+
+        let result = futures::executor::block_on(tool.execute("input"));
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("hello"));
+    }
+
+    #[test]
+    fn test_cli_tool_failure() {
+        let tool = cli("false").stdin().as_tool("fail", "Always fails");
+
+        let result = futures::executor::block_on(tool.execute("input"));
+        assert!(result.is_err());
     }
 }

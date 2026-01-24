@@ -57,7 +57,7 @@ pub struct Check {
     name: &'static str,
     kind: CheckKind,
     weight: f64,
-    feedback: &'static str,
+    feedback: String,
 }
 
 /// Fluent builder for heuristic validation checks.
@@ -103,7 +103,7 @@ impl Checks {
     /// The check fails if the text does not contain the pattern.
     pub fn require(self, pattern: impl Into<String>) -> Self {
         let pattern = pattern.into();
-        let feedback = "Missing required pattern";
+        let feedback = format!("Missing required: '{}'", pattern);
         self.add_check(Check {
             name: "require",
             kind: CheckKind::Require(pattern),
@@ -115,12 +115,39 @@ impl Checks {
     /// Require a substring pattern with custom weight.
     pub fn require_weighted(self, pattern: impl Into<String>, weight: f64) -> Self {
         let pattern = pattern.into();
+        let feedback = format!("Missing required: '{}'", pattern);
         self.add_check(Check {
             name: "require",
             kind: CheckKind::Require(pattern),
             weight,
-            feedback: "Missing required pattern",
+            feedback,
         })
+    }
+
+    /// Require multiple substring patterns to be present.
+    ///
+    /// Equivalent to calling `.require()` for each pattern.
+    pub fn require_all<I, S>(mut self, patterns: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for pattern in patterns {
+            self = self.require(pattern);
+        }
+        self
+    }
+
+    /// Require multiple substring patterns with custom weight.
+    pub fn require_all_weighted<I, S>(mut self, patterns: I, weight: f64) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for pattern in patterns {
+            self = self.require_weighted(pattern, weight);
+        }
+        self
     }
 
     /// Forbid a substring pattern.
@@ -128,23 +155,51 @@ impl Checks {
     /// The check fails if the text contains the pattern.
     pub fn forbid(self, pattern: impl Into<String>) -> Self {
         let pattern = pattern.into();
+        let feedback = format!("Must not contain: '{}'", pattern);
         self.add_check(Check {
             name: "forbid",
             kind: CheckKind::Forbid(pattern),
             weight: 1.0,
-            feedback: "Contains forbidden pattern",
+            feedback,
         })
     }
 
     /// Forbid a substring pattern with custom weight.
     pub fn forbid_weighted(self, pattern: impl Into<String>, weight: f64) -> Self {
         let pattern = pattern.into();
+        let feedback = format!("Must not contain: '{}'", pattern);
         self.add_check(Check {
             name: "forbid",
             kind: CheckKind::Forbid(pattern),
             weight,
-            feedback: "Contains forbidden pattern",
+            feedback,
         })
+    }
+
+    /// Forbid multiple substring patterns.
+    ///
+    /// Equivalent to calling `.forbid()` for each pattern.
+    pub fn forbid_all<I, S>(mut self, patterns: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for pattern in patterns {
+            self = self.forbid(pattern);
+        }
+        self
+    }
+
+    /// Forbid multiple substring patterns with custom weight.
+    pub fn forbid_all_weighted<I, S>(mut self, patterns: I, weight: f64) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for pattern in patterns {
+            self = self.forbid_weighted(pattern, weight);
+        }
+        self
     }
 
     /// Require a regex pattern to match.
@@ -152,23 +207,51 @@ impl Checks {
     /// The regex is lazily compiled on first use.
     pub fn regex(self, pattern: impl Into<String>) -> Self {
         let pattern = pattern.into();
+        let feedback = format!("Regex not matched: '{}'", pattern);
         self.add_check(Check {
             name: "regex",
             kind: CheckKind::Regex(pattern, OnceLock::new()),
             weight: 1.0,
-            feedback: "Regex pattern not matched",
+            feedback,
         })
     }
 
     /// Require a regex pattern with custom weight.
     pub fn regex_weighted(self, pattern: impl Into<String>, weight: f64) -> Self {
         let pattern = pattern.into();
+        let feedback = format!("Regex not matched: '{}'", pattern);
         self.add_check(Check {
             name: "regex",
             kind: CheckKind::Regex(pattern, OnceLock::new()),
             weight,
-            feedback: "Regex pattern not matched",
+            feedback,
         })
+    }
+
+    /// Require multiple regex patterns to match.
+    ///
+    /// Equivalent to calling `.regex()` for each pattern.
+    pub fn regex_all<I, S>(mut self, patterns: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for pattern in patterns {
+            self = self.regex(pattern);
+        }
+        self
+    }
+
+    /// Require multiple regex patterns with custom weight.
+    pub fn regex_all_weighted<I, S>(mut self, patterns: I, weight: f64) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for pattern in patterns {
+            self = self.regex_weighted(pattern, weight);
+        }
+        self
     }
 
     /// Require minimum text length.
@@ -177,7 +260,7 @@ impl Checks {
             name: "min_len",
             kind: CheckKind::MinLen(n),
             weight: 1.0,
-            feedback: "Text too short",
+            feedback: format!("Text too short (min {} chars)", n),
         })
     }
 
@@ -187,7 +270,7 @@ impl Checks {
             name: "min_len",
             kind: CheckKind::MinLen(n),
             weight,
-            feedback: "Text too short",
+            feedback: format!("Text too short (min {} chars)", n),
         })
     }
 
@@ -197,7 +280,7 @@ impl Checks {
             name: "max_len",
             kind: CheckKind::MaxLen(n),
             weight: 1.0,
-            feedback: "Text too long",
+            feedback: format!("Text too long (max {} chars)", n),
         })
     }
 
@@ -207,7 +290,7 @@ impl Checks {
             name: "max_len",
             kind: CheckKind::MaxLen(n),
             weight,
-            feedback: "Text too long",
+            feedback: format!("Text too long (max {} chars)", n),
         })
     }
 
@@ -219,7 +302,7 @@ impl Checks {
             name: "max_errors",
             kind: CheckKind::MaxErrors(n),
             weight: 1.0,
-            feedback: "Too many error lines",
+            feedback: format!("Too many error lines (max {})", n),
         })
     }
 
@@ -231,7 +314,7 @@ impl Checks {
             name,
             kind: CheckKind::Predicate(f, name),
             weight: 1.0,
-            feedback: "Predicate check failed",
+            feedback: format!("Predicate failed: '{}'", name),
         })
     }
 
@@ -241,7 +324,7 @@ impl Checks {
             name,
             kind: CheckKind::Predicate(f, name),
             weight,
-            feedback: "Predicate check failed",
+            feedback: format!("Predicate failed: '{}'", name),
         })
     }
 
@@ -260,9 +343,9 @@ impl Checks {
     }
 
     /// Set custom feedback for the most recently added check.
-    pub fn feedback(mut self, msg: &'static str) -> Self {
+    pub fn feedback(mut self, msg: impl Into<String>) -> Self {
         if let Some(check) = self.checks.last_mut() {
-            check.feedback = msg;
+            check.feedback = msg.into();
         }
         self
     }
@@ -311,7 +394,7 @@ impl Validate for Checks {
             breakdown.push((check.name, check_score));
 
             if !passed {
-                failed_checks.push(check.feedback);
+                failed_checks.push(check.feedback.as_str());
             }
         }
 
@@ -470,5 +553,76 @@ mod tests {
 
         let score = v.validate("let x = 1");
         assert_eq!(score.feedback_str(), Some("Missing function keyword"));
+    }
+
+    #[test]
+    fn test_require_all() {
+        let v = checks().require_all(["fn ", "-> i32", "pub"]);
+
+        let score = v.validate("pub fn add(a: i32, b: i32) -> i32 { a + b }");
+        assert!(score.is_perfect());
+
+        let score = v.validate("fn add(a: i32, b: i32) -> i32 { a + b }");
+        assert!(!score.is_perfect()); // missing "pub"
+    }
+
+    #[test]
+    fn test_forbid_all() {
+        let v = checks().forbid_all([".unwrap()", "panic!", "todo!"]);
+
+        let score = v.validate("fn safe() -> i32 { 42 }");
+        assert!(score.is_perfect());
+
+        let score = v.validate("fn bad() { panic!(\"oh no\") }");
+        assert!(!score.is_perfect());
+    }
+
+    #[test]
+    fn test_regex_all() {
+        let v = checks().regex_all([r"fn \w+", r"-> \w+"]);
+
+        let score = v.validate("fn add(a: i32) -> i32 { a + 1 }");
+        assert!(score.is_perfect());
+
+        let score = v.validate("let x = 42;");
+        assert!(!score.is_perfect());
+    }
+
+    #[test]
+    fn test_batch_with_vec() {
+        let patterns: Vec<String> = vec!["fn ".to_string(), "pub ".to_string()];
+        let v = checks().require_all(patterns);
+
+        let score = v.validate("pub fn test() {}");
+        assert!(score.is_perfect());
+    }
+
+    #[test]
+    fn test_batch_empty_iterator() {
+        let v = checks().require_all(Vec::<String>::new()).require("fn ");
+
+        let score = v.validate("fn test() {}");
+        assert!(score.is_perfect());
+    }
+
+    #[test]
+    fn test_batch_mixed_with_individual() {
+        let v = checks()
+            .require_all(["fn ", "-> i32"])
+            .forbid_all([".unwrap()", "panic!"])
+            .min_len(10);
+
+        let score = v.validate("fn add(a: i32, b: i32) -> i32 { a + b }");
+        assert!(score.is_perfect());
+    }
+
+    #[test]
+    fn test_batch_weighted() {
+        let v = checks()
+            .require_all_weighted(["fn ", "pub "], 0.5)
+            .forbid_all_weighted(["unsafe", "unwrap"], 2.0);
+
+        let score = v.validate("pub fn safe() -> i32 { 42 }");
+        assert!(score.is_perfect());
     }
 }

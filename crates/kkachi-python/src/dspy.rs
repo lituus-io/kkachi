@@ -736,7 +736,7 @@ impl From<ProgramResult> for PyProgramResult {
         Self {
             output: r.output,
             code: r.code,
-            attempts: r.attempts,
+            attempts: r.attempts as usize,
             tokens: r.tokens,
             success: r.success,
             error: r.error,
@@ -1136,7 +1136,7 @@ impl PyReasonBuilder {
 /// Example:
 /// ```python
 /// result = BestOfBuilder(llm, "Write a haiku", 5) \
-///     .score_with(lambda x: 1.0 if len(x.splitlines()) == 3 else 0.0) \
+///     .metric(lambda x: 1.0 if len(x.splitlines()) == 3 else 0.0) \
 ///     .go()
 /// ```
 #[pyclass(name = "BestOfBuilder")]
@@ -1200,11 +1200,11 @@ impl PyBestOfBuilder {
         Ok(new)
     }
 
-    /// Set a custom scorer function.
+    /// Set a custom scoring metric.
     ///
     /// Args:
     ///     scorer: A callable `(output: str) -> float` returning 0.0-1.0.
-    fn score_with(&self, scorer: PyObject) -> Self {
+    fn metric(&self, scorer: PyObject) -> Self {
         let mut new = self.clone();
         Python::with_gil(|py| {
             new.scorer = Some(scorer.clone_ref(py));
@@ -1281,16 +1281,18 @@ impl PyBestOfBuilder {
             // Composed validator takes priority
             let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
             if let Some(scorer) = py_scorer {
-                let mut builder = best_of(&llm, &self.prompt, self.n)
+                let mut builder = best_of(&llm, &self.prompt)
+                    .n(self.n)
                     .validate(dyn_v)
-                    .score_with(scorer)
+                    .metric(scorer)
                     .scorer_weight(self.scorer_weight);
                 if self.with_reasoning {
                     builder = builder.with_reasoning();
                 }
                 builder.go_with_pool()
             } else {
-                let mut builder = best_of(&llm, &self.prompt, self.n)
+                let mut builder = best_of(&llm, &self.prompt)
+                    .n(self.n)
                     .validate(dyn_v)
                     .scorer_weight(self.scorer_weight);
                 if self.with_reasoning {
@@ -1311,16 +1313,18 @@ impl PyBestOfBuilder {
                 }
 
                 if let Some(scorer) = py_scorer {
-                    let mut builder = best_of(&llm, &self.prompt, self.n)
+                    let mut builder = best_of(&llm, &self.prompt)
+                        .n(self.n)
                         .validate(cb)
-                        .score_with(scorer)
+                        .metric(scorer)
                         .scorer_weight(self.scorer_weight);
                     if self.with_reasoning {
                         builder = builder.with_reasoning();
                     }
                     builder.go_with_pool()
                 } else {
-                    let mut builder = best_of(&llm, &self.prompt, self.n)
+                    let mut builder = best_of(&llm, &self.prompt)
+                        .n(self.n)
                         .validate(cb)
                         .scorer_weight(self.scorer_weight);
                     if self.with_reasoning {
@@ -1329,16 +1333,18 @@ impl PyBestOfBuilder {
                     builder.go_with_pool()
                 }
             } else if let Some(scorer) = py_scorer {
-                let mut builder = best_of(&llm, &self.prompt, self.n)
-                    .score_with(scorer)
+                let mut builder = best_of(&llm, &self.prompt)
+                    .n(self.n)
+                    .metric(scorer)
                     .scorer_weight(self.scorer_weight);
                 if self.with_reasoning {
                     builder = builder.with_reasoning();
                 }
                 builder.go_with_pool()
             } else {
-                let mut builder =
-                    best_of(&llm, &self.prompt, self.n).scorer_weight(self.scorer_weight);
+                let mut builder = best_of(&llm, &self.prompt)
+                    .n(self.n)
+                    .scorer_weight(self.scorer_weight);
                 if self.with_reasoning {
                     builder = builder.with_reasoning();
                 }
@@ -1502,7 +1508,8 @@ impl PyEnsembleBuilder {
 
         let (result, consensus) = if let Some(ref node) = self.validator {
             let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
-            let mut builder = ensemble(&llm, &self.prompt, self.n)
+            let mut builder = ensemble(&llm, &self.prompt)
+                .n(self.n)
                 .validate(dyn_v)
                 .aggregate(aggregate);
             if self.with_reasoning {
@@ -1523,7 +1530,8 @@ impl PyEnsembleBuilder {
                 for pattern in &self.forbid_patterns {
                     cb = cb.forbid(pattern);
                 }
-                let mut builder = ensemble(&llm, &self.prompt, self.n)
+                let mut builder = ensemble(&llm, &self.prompt)
+                    .n(self.n)
                     .validate(cb)
                     .aggregate(aggregate);
                 if self.with_reasoning {
@@ -1534,7 +1542,7 @@ impl PyEnsembleBuilder {
                 }
                 builder.go_with_consensus()
             } else {
-                let mut builder = ensemble(&llm, &self.prompt, self.n).aggregate(aggregate);
+                let mut builder = ensemble(&llm, &self.prompt).n(self.n).aggregate(aggregate);
                 if self.with_reasoning {
                     builder = builder.with_reasoning();
                 }
@@ -1665,7 +1673,7 @@ impl PyAgentBuilder {
 /// ```python
 /// result = ProgramBuilder(llm, "Calculate Fibonacci(50)") \
 ///     .executor(Executor.python()) \
-///     .max_attempts(3) \
+///     .max_iter(3) \
 ///     .go()
 /// ```
 #[pyclass(name = "ProgramBuilder")]
@@ -1673,7 +1681,7 @@ pub struct PyProgramBuilder {
     llm: PyObject,
     problem: String,
     executor: Option<PyExecutor>,
-    max_attempts: usize,
+    max_iter: usize,
     include_code: bool,
     language: Option<String>,
     // Inline validation
@@ -1690,7 +1698,7 @@ impl Clone for PyProgramBuilder {
             llm: self.llm.clone_ref(py),
             problem: self.problem.clone(),
             executor: self.executor.clone(),
-            max_attempts: self.max_attempts,
+            max_iter: self.max_iter,
             include_code: self.include_code,
             language: self.language.clone(),
             require_patterns: self.require_patterns.clone(),
@@ -1714,7 +1722,7 @@ impl PyProgramBuilder {
             llm,
             problem,
             executor: None,
-            max_attempts: 3,
+            max_iter: 3,
             include_code: true,
             language: None,
             require_patterns: Vec::new(),
@@ -1739,9 +1747,9 @@ impl PyProgramBuilder {
     }
 
     /// Set maximum code generation attempts.
-    fn max_attempts(&self, n: usize) -> Self {
+    fn max_iter(&self, n: usize) -> Self {
         let mut new = self.clone();
-        new.max_attempts = n;
+        new.max_iter = n;
         new
     }
 
@@ -1794,7 +1802,7 @@ impl PyProgramBuilder {
             let mut builder = program(&llm, &self.problem)
                 .executor(rust_executor)
                 .validate(dyn_v)
-                .max_attempts(self.max_attempts);
+                .max_iter(self.max_iter as u32);
             if !self.include_code {
                 builder = builder.no_code();
             }
@@ -1821,7 +1829,7 @@ impl PyProgramBuilder {
                 let mut builder = program(&llm, &self.problem)
                     .executor(rust_executor)
                     .validate(cb)
-                    .max_attempts(self.max_attempts);
+                    .max_iter(self.max_iter as u32);
                 if !self.include_code {
                     builder = builder.no_code();
                 }
@@ -1832,7 +1840,7 @@ impl PyProgramBuilder {
             } else {
                 let mut builder = program(&llm, &self.problem)
                     .executor(rust_executor)
-                    .max_attempts(self.max_attempts);
+                    .max_iter(self.max_iter as u32);
                 if !self.include_code {
                     builder = builder.no_code();
                 }
@@ -1848,9 +1856,9 @@ impl PyProgramBuilder {
 
     fn __repr__(&self) -> String {
         format!(
-            "ProgramBuilder(problem='{}', max_attempts={})",
+            "ProgramBuilder(problem='{}', max_iter={})",
             truncate_str(&self.problem, 30),
-            self.max_attempts
+            self.max_iter
         )
     }
 }

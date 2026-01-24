@@ -7,16 +7,17 @@
 //! This module provides the output types for refinement operations,
 //! including iteration history, corrections, and optimized prompts.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::recursive::cli::CliCapture;
 use crate::recursive::llm::Llm;
 use crate::recursive::validate::Validate;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::fmt;
 use std::time::Duration;
 
 /// Reason why the refinement loop stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum StopReason {
     /// Target score was reached.
     TargetReached,
@@ -52,7 +53,7 @@ impl fmt::Display for StopReason {
 /// Unique identifier for a refinement context.
 ///
 /// This can be used to link related refinements together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub struct ContextId(pub u64);
 
 impl ContextId {
@@ -81,7 +82,7 @@ impl fmt::Display for ContextId {
 }
 
 /// A single iteration in the refinement loop.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Iteration {
     /// The iteration number (0-based).
     pub number: u32,
@@ -96,7 +97,7 @@ pub struct Iteration {
 /// A correction made during refinement.
 ///
 /// Records an error and its resolution for learning.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Correction {
     /// Description of the error.
     pub error: String,
@@ -107,7 +108,7 @@ pub struct Correction {
 }
 
 /// An example used in few-shot prompting.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Example {
     /// The input/question.
     pub input: String,
@@ -129,7 +130,7 @@ impl Example {
 ///
 /// Contains the refined signature, instructions, and examples
 /// that can be used for future generations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizedPrompt {
     /// The signature (e.g., "question -> answer").
     pub signature: String,
@@ -170,6 +171,23 @@ impl OptimizedPrompt {
         self
     }
 
+    /// Serialize this prompt to JSON and save to a file.
+    #[cfg(feature = "std")]
+    pub fn save(&self, path: &str) -> Result<()> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| Error::module(format!("Failed to serialize OptimizedPrompt: {}", e)))?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Load a previously saved OptimizedPrompt from a JSON file.
+    #[cfg(feature = "std")]
+    pub fn load(path: &str) -> Result<Self> {
+        let json = std::fs::read_to_string(path)?;
+        serde_json::from_str(&json)
+            .map_err(|e| Error::module(format!("Failed to deserialize OptimizedPrompt: {}", e)))
+    }
+
     /// Render the prompt for display.
     pub fn render(&self) -> String {
         let mut result = format!("Signature: {}\n", self.signature);
@@ -193,7 +211,7 @@ impl OptimizedPrompt {
 ///
 /// Contains the final output along with metadata about the refinement
 /// process, including iteration history and any corrections made.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefineResult {
     /// The final refined output.
     pub output: String,
@@ -375,6 +393,54 @@ impl RefineResult {
         }
         let first = self.history.first().map(|h| h.score).unwrap_or(0.0);
         self.score - first
+    }
+
+    /// Serialize this result to JSON and save to a file.
+    ///
+    /// Allows persisting refinement state across sessions so optimization
+    /// can be resumed or analyzed later.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use kkachi::recursive::result::RefineResult;
+    /// let result = RefineResult::new("output", 0.95, 3);
+    /// result.save("/tmp/refine_state.json").unwrap();
+    /// ```
+    #[cfg(feature = "std")]
+    pub fn save(&self, path: &str) -> Result<()> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| Error::module(format!("Failed to serialize RefineResult: {}", e)))?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
+
+    /// Load a previously saved RefineResult from a JSON file.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use kkachi::recursive::result::RefineResult;
+    /// let result = RefineResult::load("/tmp/refine_state.json").unwrap();
+    /// println!("Loaded result with score: {}", result.score);
+    /// ```
+    #[cfg(feature = "std")]
+    pub fn load(path: &str) -> Result<Self> {
+        let json = std::fs::read_to_string(path)?;
+        serde_json::from_str(&json)
+            .map_err(|e| Error::module(format!("Failed to deserialize RefineResult: {}", e)))
+    }
+
+    /// Serialize this result to a JSON string.
+    pub fn to_json(&self) -> Result<String> {
+        serde_json::to_string_pretty(self)
+            .map_err(|e| Error::module(format!("Failed to serialize RefineResult: {}", e)))
+    }
+
+    /// Deserialize a RefineResult from a JSON string.
+    pub fn from_json(json: &str) -> Result<Self> {
+        serde_json::from_str(json)
+            .map_err(|e| Error::module(format!("Failed to deserialize RefineResult: {}", e)))
     }
 }
 
@@ -598,4 +664,130 @@ mod tests {
 
         assert!((result.improvement() - 0.6).abs() < 0.01);
     }
+
+    #[test]
+    fn test_refine_result_json_roundtrip() {
+        let mut result = RefineResult::new("test output", 0.95, 2);
+        result.stop_reason = StopReason::TargetReached;
+        result.total_tokens = 500;
+        result.confidence = 0.9;
+        result.add_iteration(Iteration {
+            number: 0,
+            output: "first attempt".to_string(),
+            score: 0.5,
+            feedback: Some("needs improvement".to_string()),
+        });
+        result.add_iteration(Iteration {
+            number: 1,
+            output: "test output".to_string(),
+            score: 0.95,
+            feedback: None,
+        });
+        result.add_correction("missing semicolon", "added semicolon at line 5");
+        result.prompt = Some(
+            OptimizedPrompt::new("question -> answer")
+                .with_instructions("Be concise")
+                .with_example("Q1", "A1"),
+        );
+
+        let json = result.to_json().unwrap();
+        let loaded = RefineResult::from_json(&json).unwrap();
+
+        assert_eq!(loaded.output, "test output");
+        assert!((loaded.score - 0.95).abs() < f64::EPSILON);
+        assert_eq!(loaded.iterations, 2);
+        assert_eq!(loaded.stop_reason, StopReason::TargetReached);
+        assert_eq!(loaded.total_tokens, 500);
+        assert_eq!(loaded.history.len(), 2);
+        assert_eq!(loaded.corrections.len(), 1);
+        assert!(loaded.prompt.is_some());
+        assert_eq!(loaded.prompt.unwrap().signature, "question -> answer");
+    }
+
+    #[test]
+    fn test_refine_result_save_load() {
+        let result = RefineResult::new("saved output", 1.0, 1);
+        let path = std::env::temp_dir().join("kkachi_test_result.json");
+        let path_str = path.to_str().unwrap();
+
+        result.save(path_str).unwrap();
+        let loaded = RefineResult::load(path_str).unwrap();
+
+        assert_eq!(loaded.output, "saved output");
+        assert!((loaded.score - 1.0).abs() < f64::EPSILON);
+
+        // Cleanup
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_optimized_prompt_json_roundtrip() {
+        let prompt = OptimizedPrompt::new("input -> output")
+            .with_instructions("Follow the format")
+            .with_example("hello", "world")
+            .with_example("foo", "bar")
+            .with_template("Template: {{ input }}");
+
+        let json = serde_json::to_string(&prompt).unwrap();
+        let loaded: OptimizedPrompt = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(loaded.signature, "input -> output");
+        assert_eq!(loaded.instructions, "Follow the format");
+        assert_eq!(loaded.examples.len(), 2);
+        assert_eq!(loaded.template, "Template: {{ input }}");
+    }
+
+    #[test]
+    fn test_refine_event_serialize() {
+        let event = RefineEvent::IterationComplete {
+            iteration: 2,
+            score: 0.8,
+            output: "some output".to_string(),
+            feedback: Some("try harder".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let loaded: RefineEvent = serde_json::from_str(&json).unwrap();
+
+        if let RefineEvent::IterationComplete {
+            iteration, score, ..
+        } = loaded
+        {
+            assert_eq!(iteration, 2);
+            assert!((score - 0.8).abs() < f64::EPSILON);
+        } else {
+            panic!("Wrong variant");
+        }
+    }
+}
+
+// ============================================================================
+// Streaming Event Types
+// ============================================================================
+
+/// Events emitted during refinement streaming via `run_stream()`.
+///
+/// Use these events to observe refinement progress in real-time without
+/// waiting for the entire operation to complete.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RefineEvent {
+    /// A new iteration has started.
+    IterationStart {
+        /// The iteration number (0-indexed).
+        iteration: u32,
+    },
+    /// An iteration has completed with a score.
+    IterationComplete {
+        /// The iteration number (0-indexed).
+        iteration: u32,
+        /// The validation score for this iteration.
+        score: f64,
+        /// The LLM output for this iteration.
+        output: String,
+        /// Feedback generated for the next iteration (if any).
+        feedback: Option<String>,
+    },
+    /// Refinement completed successfully.
+    Complete(Box<RefineResult>),
+    /// Refinement failed with an error.
+    Error(String),
 }

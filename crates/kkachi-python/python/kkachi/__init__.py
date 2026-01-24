@@ -9,22 +9,16 @@ This package provides Python bindings for the Kkachi Rust library,
 enabling high-performance recursive language prompting and optimization.
 
 Example:
-    >>> from kkachi import Kkachi, Cli, CliPipeline
+    >>> from kkachi import Kkachi, Checks
     >>>
     >>> def generate(iteration, feedback):
     ...     if feedback:
     ...         return f"Improved output for iteration {iteration}"
     ...     return "Initial output"
     >>>
-    >>> # Compose your own validator
-    >>> validator = CliPipeline() \\
-    ...     .stage("syntax", Cli("python").args(["-m", "py_compile"]).required()) \\
-    ...     .stage("lint", Cli("ruff").args(["check"])) \\
-    ...     .file_ext("py")
-    >>>
     >>> result = Kkachi.refine("question -> code") \\
     ...     .domain("python") \\
-    ...     .validate(validator) \\
+    ...     .validate(Checks().require("def ")) \\
     ...     .max_iterations(5) \\
     ...     .run("Write a URL parser", generate)
     >>>
@@ -37,20 +31,9 @@ from kkachi._kkachi import (
     # Builder
     RefineBuilder,
     # Result types
-    RefinementResult,
     RefineResult,
-    # CLI Validators
-    Cli,
-    CliPipeline,
-    # Tool types (deprecated)
-    ToolType,
-    # Similarity
-    SimilarityWeights,
-    # Few-shot config
-    FewShotConfig,
-    # VectorStore types
-    VectorSearchResult,
-    InMemoryVectorStore,
+    # CLI Validator
+    CliValidator,
     # Validators & Composition
     Checks,
     Semantic,
@@ -99,20 +82,9 @@ __all__ = [
     # Builder
     "RefineBuilder",
     # Result types
-    "RefinementResult",
     "RefineResult",
-    # CLI Validators
-    "Cli",
-    "CliPipeline",
-    # Tool types (deprecated)
-    "ToolType",
-    # Similarity
-    "SimilarityWeights",
-    # Few-shot config
-    "FewShotConfig",
-    # VectorStore types
-    "VectorSearchResult",
-    "InMemoryVectorStore",
+    # CLI Validator
+    "CliValidator",
     # Validators & Composition
     "Checks",
     "Semantic",

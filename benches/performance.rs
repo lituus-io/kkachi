@@ -8,18 +8,14 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use kkachi::*;
 
 fn benchmark_signature_creation(c: &mut Criterion) {
-    c.bench_function("signature_from_str", |b| {
-        b.iter(|| {
-            Signature::from_str(black_box("question, context -> answer, confidence")).unwrap()
-        })
+    c.bench_function("signature_parse", |b| {
+        b.iter(|| Signature::parse(black_box("question, context -> answer, confidence")).unwrap())
     });
 }
 
 fn benchmark_field_inference(c: &mut Criterion) {
-    c.bench_function("field_prefix_inference", |b| {
-        b.iter(|| {
-            field::InputField::new(black_box("userQueryText"), "desc")
-        })
+    c.bench_function("field_create", |b| {
+        b.iter(|| field::InputField::create(black_box("userQueryText"), "desc"))
     });
 }
 

@@ -328,6 +328,147 @@ impl Llm for BoxedLlm<'_> {
 }
 
 // ============================================================================
+// CliLlm: Claude Code CLI subprocess (no feature gate)
+// ============================================================================
+
+/// Find the `claude` binary in PATH or common locations.
+fn which_claude() -> Option<String> {
+    // Check PATH first
+    if let Ok(output) = std::process::Command::new("which").arg("claude").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+
+    // Common installation paths
+    let common_paths = ["/usr/local/bin/claude", "/opt/homebrew/bin/claude"];
+
+    for path in &common_paths {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+
+    None
+}
+
+/// LLM backed by the local Claude Code CLI (`claude` binary).
+///
+/// This requires no API key or external dependencies — it uses
+/// `std::process::Command` to invoke the `claude` CLI in print mode.
+/// Always available (not feature-gated).
+///
+/// # Examples
+///
+/// ```no_run
+/// use kkachi::recursive::{CliLlm, refine, checks};
+///
+/// let llm = CliLlm::new().unwrap();
+/// let result = refine(&llm, "Write a Rust add function")
+///     .validate(checks().require("fn ").require("->"))
+///     .max_iter(3)
+///     .go();
+/// ```
+pub struct CliLlm {
+    path: String,
+}
+
+impl CliLlm {
+    /// Create a new CliLlm by finding the `claude` binary.
+    ///
+    /// Returns an error if the `claude` CLI is not found in PATH
+    /// or common installation locations.
+    pub fn new() -> Result<Self> {
+        let path = which_claude()
+            .ok_or_else(|| Error::module("claude CLI not found. Install Claude Code first."))?;
+        Ok(Self { path })
+    }
+
+    /// Create a CliLlm with an explicit path to the `claude` binary.
+    pub fn with_path(path: impl Into<String>) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+impl Llm for CliLlm {
+    type GenerateFut<'a> = std::future::Ready<Result<LmOutput>>;
+
+    fn generate<'a>(
+        &'a self,
+        prompt: &'a str,
+        context: &'a str,
+        feedback: Option<&'a str>,
+    ) -> Self::GenerateFut<'a> {
+        let mut combined = String::new();
+        if !context.is_empty() {
+            combined.push_str(context);
+            combined.push_str("\n\n");
+        }
+        combined.push_str(prompt);
+        if let Some(fb) = feedback {
+            combined.push_str("\n\n[Previous attempt feedback: ");
+            combined.push_str(fb);
+            combined.push(']');
+        }
+
+        let result = std::process::Command::new(&self.path)
+            .args(["-p", &combined, "--output-format", "text"])
+            .output();
+
+        let output = match result {
+            Ok(o) => o,
+            Err(e) => {
+                return std::future::ready(Err(Error::module(format!(
+                    "Failed to execute claude CLI: {}",
+                    e
+                ))));
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return std::future::ready(Err(Error::module(format!(
+                "claude CLI failed: {}",
+                stderr
+            ))));
+        }
+
+        let text = match String::from_utf8(output.stdout) {
+            Ok(s) => s.trim().to_string(),
+            Err(e) => {
+                return std::future::ready(Err(Error::module(format!(
+                    "claude CLI output is not valid UTF-8: {}",
+                    e
+                ))));
+            }
+        };
+
+        // Estimate tokens from word count (rough approximation)
+        let word_count = text.split_whitespace().count() as u32;
+        let prompt_word_count = combined.split_whitespace().count() as u32;
+        let est_prompt_tokens = (prompt_word_count as f64 * 1.3) as u32;
+        let est_completion_tokens = (word_count as f64 * 1.3) as u32;
+
+        std::future::ready(Ok(LmOutput::with_tokens(
+            text,
+            est_prompt_tokens,
+            est_completion_tokens,
+        )))
+    }
+
+    fn model_name(&self) -> &str {
+        "claude-code"
+    }
+
+    fn max_context(&self) -> usize {
+        200_000
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

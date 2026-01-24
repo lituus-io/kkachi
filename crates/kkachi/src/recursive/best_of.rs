@@ -14,8 +14,8 @@
 //!
 //! let llm = MockLlm::new(|_, _| "Generated response".to_string());
 //!
-//! let result = best_of(&llm, "Write a haiku", 3)
-//!     .score_with(|output| if output.lines().count() == 3 { 1.0 } else { 0.0 })
+//! let result = best_of(&llm, "Write a haiku")
+//!     .metric(|output| if output.lines().count() == 3 { 1.0 } else { 0.0 })
 //!     .go();
 //! ```
 
@@ -34,16 +34,15 @@ use smallvec::SmallVec;
 ///
 /// let llm = MockLlm::new(|_, _| "fn main() {}".to_string());
 ///
-/// let result = best_of(&llm, "Write code", 5)
+/// let result = best_of(&llm, "Write code").n(5)
 ///     .validate(checks().require("fn "))
 ///     .go();
 /// ```
 pub fn best_of<'a, L: Llm>(
     llm: &'a L,
     prompt: &'a str,
-    n: usize,
 ) -> BestOf<'a, L, NoValidation, DefaultScorer> {
-    BestOf::new(llm, prompt, n)
+    BestOf::new(llm, prompt)
 }
 
 /// Scorer trait for evaluating candidates.
@@ -82,6 +81,12 @@ pub struct BestOfConfig {
     pub scorer_weight: f64,
     /// Weight for validator (1.0 - scorer_weight).
     pub validator_weight: f64,
+    /// Whether to inject diversity hints for each candidate.
+    pub diverse: bool,
+    /// Language to extract from code fences before validation (e.g., "rust").
+    pub extract_lang: Option<String>,
+    /// Whether to generate candidates in parallel using threads.
+    pub parallel: bool,
 }
 
 impl Default for BestOfConfig {
@@ -90,6 +95,9 @@ impl Default for BestOfConfig {
             with_reasoning: false,
             scorer_weight: 0.5,
             validator_weight: 0.5,
+            diverse: true,
+            extract_lang: None,
+            parallel: false,
         }
     }
 }
@@ -108,12 +116,12 @@ pub struct BestOf<'a, L: Llm, V: Validate, S: Scorer> {
 }
 
 impl<'a, L: Llm> BestOf<'a, L, NoValidation, DefaultScorer> {
-    /// Create a new Best of N builder.
-    pub fn new(llm: &'a L, prompt: &'a str, n: usize) -> Self {
+    /// Create a new Best of N builder with default N=3.
+    pub fn new(llm: &'a L, prompt: &'a str) -> Self {
         Self {
             llm,
             prompt,
-            n: n.max(1),
+            n: 3,
             validator: NoValidation,
             scorer: DefaultScorer,
             config: BestOfConfig::default(),
@@ -122,6 +130,12 @@ impl<'a, L: Llm> BestOf<'a, L, NoValidation, DefaultScorer> {
 }
 
 impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
+    /// Set the number of candidates to generate (default: 3).
+    pub fn n(mut self, n: usize) -> Self {
+        self.n = n.max(1);
+        self
+    }
+
     /// Set a validator for candidates.
     ///
     /// The validator score is combined with the scorer to determine
@@ -137,14 +151,11 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
         }
     }
 
-    /// Set a custom scorer function.
+    /// Set a custom scoring metric.
     ///
     /// The scorer evaluates each candidate and returns a score between
     /// 0.0 and 1.0.
-    pub fn score_with<F: Fn(&str) -> f64 + Send + Sync>(
-        self,
-        f: F,
-    ) -> BestOf<'a, L, V, FnScorer<F>> {
+    pub fn metric<F: Fn(&str) -> f64 + Send + Sync>(self, f: F) -> BestOf<'a, L, V, FnScorer<F>> {
         BestOf {
             llm: self.llm,
             prompt: self.prompt,
@@ -170,12 +181,79 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
         self
     }
 
+    /// Disable diversity hints between candidates.
+    ///
+    /// By default, each candidate receives a context hint encouraging
+    /// a different approach. Disable this to generate candidates identically.
+    pub fn no_diversity(mut self) -> Self {
+        self.config.diverse = false;
+        self
+    }
+
+    /// Enable diversity hints between candidates (the default).
+    ///
+    /// Each candidate receives a context hint encouraging a different approach.
+    /// Use this to explicitly re-enable diversity after `.no_diversity()`.
+    pub fn diverse(mut self) -> Self {
+        self.config.diverse = true;
+        self
+    }
+
+    /// Generate candidates in parallel using threads.
+    ///
+    /// When enabled, all N candidates are generated concurrently using
+    /// `std::thread::scope`. Diversity hints are still applied but cannot
+    /// reference previous candidates' outputs.
+    pub fn parallel(mut self) -> Self {
+        self.config.parallel = true;
+        self
+    }
+
+    /// Extract code from markdown fences before validation.
+    ///
+    /// When set, the validator and scorer receive only the extracted code
+    /// (from the first matching code fence), not the full LLM response.
+    pub fn extract(mut self, lang: impl Into<String>) -> Self {
+        self.config.extract_lang = Some(lang.into());
+        self
+    }
+
     /// Execute synchronously and return the best result.
+    #[cfg(feature = "native")]
+    pub fn go(self) -> BestOfResult {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.run()))
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime")
+                .block_on(self.run())
+        }
+    }
+
+    /// Execute synchronously and return the best result (fallback without tokio).
+    #[cfg(not(feature = "native"))]
     pub fn go(self) -> BestOfResult {
         futures::executor::block_on(self.run())
     }
 
     /// Execute synchronously and return both result and candidate pool.
+    #[cfg(feature = "native")]
+    pub fn go_with_pool(self) -> (BestOfResult, CandidatePool) {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.run_with_pool()))
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime")
+                .block_on(self.run_with_pool())
+        }
+    }
+
+    /// Execute synchronously and return both result and candidate pool (fallback).
+    #[cfg(not(feature = "native"))]
     pub fn go_with_pool(self) -> (BestOfResult, CandidatePool) {
         futures::executor::block_on(self.run_with_pool())
     }
@@ -188,6 +266,11 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
 
     /// Execute asynchronously with candidate pool.
     pub async fn run_with_pool(self) -> (BestOfResult, CandidatePool) {
+        use crate::recursive::rewrite::extract_code;
+
+        #[cfg(feature = "tracing")]
+        let _span = tracing::info_span!("best_of", n = self.n).entered();
+
         let mut candidates: SmallVec<[ScoredCandidate; 8]> = SmallVec::new();
         let mut best_idx = 0;
         let mut best_score = f64::MIN;
@@ -200,34 +283,174 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
             self.prompt.to_string()
         };
 
-        for i in 0..self.n {
-            let output = match self.llm.generate(&prompt, "", None).await {
-                Ok(out) => out,
-                Err(e) => {
-                    error = Some(e.to_string());
-                    continue;
+        if self.config.parallel {
+            // Parallel mode: generate all candidates concurrently using FuturesUnordered
+            use futures::stream::{FuturesUnordered, StreamExt};
+
+            let style_hints = [
+                "concise and minimal",
+                "explicit and well-documented",
+                "using a different algorithm or technique",
+                "optimized for readability",
+                "optimized for performance",
+                "using standard library idioms",
+                "using a creative or unconventional approach",
+                "with extensive error handling",
+            ];
+
+            let contexts: Vec<String> = (0..self.n)
+                .map(|i| {
+                    if self.config.diverse && self.n > 1 {
+                        let hint = style_hints[i % style_hints.len()];
+                        format!(
+                            "Generate candidate {} of {}. Style: {}.",
+                            i + 1,
+                            self.n,
+                            hint
+                        )
+                    } else {
+                        String::new()
+                    }
+                })
+                .collect();
+
+            let mut futs = FuturesUnordered::new();
+            for (i, ctx) in contexts.iter().enumerate() {
+                let fut = self.llm.generate(&prompt, ctx, None);
+                futs.push(async move { (i, fut.await) });
+            }
+
+            let mut outputs: Vec<(usize, crate::error::Result<crate::recursive::llm::LmOutput>)> =
+                Vec::with_capacity(self.n);
+            while let Some(result) = futs.next().await {
+                outputs.push(result);
+            }
+
+            for (i, result) in outputs {
+                let output = match result {
+                    Ok(out) => out,
+                    Err(e) => {
+                        error = Some(e.to_string());
+                        continue;
+                    }
+                };
+
+                total_tokens += output.prompt_tokens + output.completion_tokens;
+
+                let text_to_score = if let Some(ref lang) = self.config.extract_lang {
+                    extract_code(&output.text, lang)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| output.text.clone())
+                } else {
+                    output.text.clone()
+                };
+
+                let scorer_score = self.scorer.score(&text_to_score).clamp(0.0, 1.0);
+                let validator_score = self.validator.validate(&text_to_score);
+                let combined = scorer_score * self.config.scorer_weight
+                    + validator_score.value * self.config.validator_weight;
+
+                #[cfg(feature = "tracing")]
+                tracing::debug!(candidate = i, score = combined, "best_of candidate scored");
+
+                candidates.push(ScoredCandidate {
+                    index: i,
+                    output: output.text,
+                    scorer_score,
+                    validator_score: validator_score.value,
+                    combined_score: combined,
+                    feedback: validator_score.feedback_str().map(|s| s.to_string()),
+                });
+
+                if combined > best_score {
+                    best_score = combined;
+                    best_idx = candidates.len() - 1;
                 }
-            };
+            }
+        } else {
+            // Sequential mode: generate candidates one at a time
+            for i in 0..self.n {
+                // Build diversity context for this candidate
+                let context = if self.config.diverse && self.n > 1 {
+                    let style_hints = [
+                        "concise and minimal",
+                        "explicit and well-documented",
+                        "using a different algorithm or technique",
+                        "optimized for readability",
+                        "optimized for performance",
+                        "using standard library idioms",
+                        "using a creative or unconventional approach",
+                        "with extensive error handling",
+                    ];
+                    let hint = style_hints[i % style_hints.len()];
+                    let mut ctx = format!(
+                        "Generate candidate {} of {}. Style: {}.",
+                        i + 1,
+                        self.n,
+                        hint
+                    );
+                    // Include previous outputs so the LLM avoids duplicates
+                    if i > 0 && !candidates.is_empty() {
+                        ctx.push_str("\n\nAvoid repeating these previous approaches:\n");
+                        for prev in candidates.iter().take(3) {
+                            let snippet = if prev.output.len() > 80 {
+                                // Find a valid char boundary at or before byte 80
+                                let mut end = 80;
+                                while end > 0 && !prev.output.is_char_boundary(end) {
+                                    end -= 1;
+                                }
+                                &prev.output[..end]
+                            } else {
+                                &prev.output
+                            };
+                            ctx.push_str(&format!("- {}\n", snippet.replace('\n', " ")));
+                        }
+                    }
+                    ctx
+                } else {
+                    String::new()
+                };
 
-            total_tokens += output.prompt_tokens + output.completion_tokens;
+                let output = match self.llm.generate(&prompt, &context, None).await {
+                    Ok(out) => out,
+                    Err(e) => {
+                        error = Some(e.to_string());
+                        continue;
+                    }
+                };
 
-            let scorer_score = self.scorer.score(&output.text).clamp(0.0, 1.0);
-            let validator_score = self.validator.validate(&output.text);
-            let combined = scorer_score * self.config.scorer_weight
-                + validator_score.value * self.config.validator_weight;
+                total_tokens += output.prompt_tokens + output.completion_tokens;
 
-            candidates.push(ScoredCandidate {
-                index: i,
-                output: output.text,
-                scorer_score,
-                validator_score: validator_score.value,
-                combined_score: combined,
-                feedback: validator_score.feedback_str().map(|s| s.to_string()),
-            });
+                // Extract code from markdown if configured
+                let text_to_score = if let Some(ref lang) = self.config.extract_lang {
+                    extract_code(&output.text, lang)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| output.text.clone())
+                } else {
+                    output.text.clone()
+                };
 
-            if combined > best_score {
-                best_score = combined;
-                best_idx = candidates.len() - 1;
+                let scorer_score = self.scorer.score(&text_to_score).clamp(0.0, 1.0);
+                let validator_score = self.validator.validate(&text_to_score);
+                let combined = scorer_score * self.config.scorer_weight
+                    + validator_score.value * self.config.validator_weight;
+
+                #[cfg(feature = "tracing")]
+                tracing::debug!(candidate = i, score = combined, "best_of candidate scored");
+
+                candidates.push(ScoredCandidate {
+                    index: i,
+                    output: output.text,
+                    scorer_score,
+                    validator_score: validator_score.value,
+                    combined_score: combined,
+                    feedback: validator_score.feedback_str().map(|s| s.to_string()),
+                });
+
+                if combined > best_score {
+                    best_score = combined;
+                    best_idx = candidates.len() - 1;
+                }
             }
         }
 
@@ -252,6 +475,14 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
             candidates,
             total_tokens,
         };
+
+        #[cfg(feature = "tracing")]
+        tracing::info!(
+            best_score,
+            candidates = self.n,
+            tokens = total_tokens,
+            "best_of complete"
+        );
 
         (
             BestOfResult {
@@ -420,7 +651,7 @@ mod tests {
             format!("Response {}", n)
         });
 
-        let result = best_of(&llm, "Generate", 3).go();
+        let result = best_of(&llm, "Generate").go();
 
         assert!(!result.output.is_empty());
         assert_eq!(result.candidates_generated, 3);
@@ -439,8 +670,8 @@ mod tests {
             }
         });
 
-        let result = best_of(&llm, "Generate", 3)
-            .score_with(|output| output.len() as f64 / 30.0)
+        let result = best_of(&llm, "Generate")
+            .metric(|output| output.len() as f64 / 30.0)
             .go();
 
         // Best should be the longest
@@ -455,7 +686,8 @@ mod tests {
             format!("fn test{}() {{}}", n)
         });
 
-        let (result, pool) = best_of(&llm, "Write code", 5)
+        let (result, pool) = best_of(&llm, "Write code")
+            .n(5)
             .validate(checks().require("fn "))
             .go_with_pool();
 
@@ -475,8 +707,9 @@ mod tests {
             if n % 2 == 0 { "good" } else { "bad" }.to_string()
         });
 
-        let (_, pool) = best_of(&llm, "Generate", 4)
-            .score_with(|output| if output == "good" { 1.0 } else { 0.0 })
+        let (_, pool) = best_of(&llm, "Generate")
+            .n(4)
+            .metric(|output| if output == "good" { 1.0 } else { 0.0 })
             .go_with_pool();
 
         // Combined score = scorer * 0.5 + validator * 0.5
@@ -494,7 +727,7 @@ mod tests {
     fn test_scorer_weight() {
         let llm = MockLlm::new(|_, _| "test".to_string());
 
-        let builder = best_of(&llm, "test", 1).scorer_weight(0.8);
+        let builder = best_of(&llm, "test").n(1).scorer_weight(0.8);
 
         assert!((builder.config.scorer_weight - 0.8).abs() < f64::EPSILON);
         assert!((builder.config.validator_weight - 0.2).abs() < f64::EPSILON);
