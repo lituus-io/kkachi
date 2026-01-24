@@ -1,0 +1,41 @@
+[package]
+name = "kkachi-python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file = "LICENSE"
+repository.workspace = true
+description = "Python bindings for the Kkachi LLM optimization library"
+readme = "README.md"
+keywords = ["python", "llm", "optimization", "dspy", "prompting"]
+categories = ["development-tools", "science"]
+
+[lib]
+name = "kkachi"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Core kkachi library
+kkachi = { path = "../kkachi" }
+
+# Python bindings
+pyo3 = { workspace = true }
+
+# Serialization for Python objects
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Async runtime (for blocking on futures from code executor)
+futures = { workspace = true }
+
+[dev-dependencies]
+# For testing
+pyo3 = { version = "0.22", features = ["auto-initialize"] }
+
+[features]
+default = []
+# Enable storage features
+storage = ["kkachi/storage"]

@@ -1,0 +1,54 @@
+[workspace]
+
+[package]
+name = "kkachi-examples"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Examples demonstrating the kkachi recursive refinement API.
+
+[[example]]
+name = "refine"
+path = "refine.rs"
+
+[[example]]
+name = "reason"
+path = "reason.rs"
+
+[[example]]
+name = "best_of"
+path = "best_of.rs"
+
+[[example]]
+name = "ensemble"
+path = "ensemble.rs"
+
+[[example]]
+name = "optimize"
+path = "optimize.rs"
+
+[[example]]
+name = "validators"
+path = "validators.rs"
+
+[[example]]
+name = "rate_limit"
+path = "rate_limit.rs"
+
+[[example]]
+name = "fan_out"
+path = "fan_out.rs"
+
+[[example]]
+name = "pareto"
+path = "pareto.rs"
+
+[features]
+default = []
+api = ["kkachi/api"]
+storage = ["kkachi/storage"]
+
+[dependencies]
+kkachi = { path = "../crates/kkachi", features = ["api"] }
+anyhow = "1.0"
