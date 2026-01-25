@@ -34,6 +34,7 @@ mod builder;
 mod checks;
 mod compose;
 mod dspy;
+mod llm;
 mod rewrite;
 mod semantic;
 mod template;
@@ -44,6 +45,7 @@ use builder::*;
 use checks::*;
 use compose::*;
 use dspy::*;
+use llm::*;
 use rewrite::*;
 use semantic::*;
 use template::*;
@@ -55,6 +57,9 @@ use validator::*;
 fn _kkachi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Main entry point
     m.add_class::<PyKkachi>()?;
+
+    // LLM implementations
+    m.add_class::<PyApiLlm>()?;
 
     // Builder
     m.add_class::<PyRefineBuilder>()?;

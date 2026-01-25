@@ -23,6 +23,8 @@ Example:
 from kkachi._kkachi import (
     # Main entry point
     Kkachi,
+    # LLM implementations
+    ApiLlm,
     # Builder
     RefineBuilder,
     # Result types
@@ -77,6 +79,8 @@ from kkachi._kkachi import (
 __all__ = [
     # Main entry point
     "Kkachi",
+    # LLM implementations
+    "ApiLlm",
     # Builder
     "RefineBuilder",
     # Result types
