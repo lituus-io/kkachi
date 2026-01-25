@@ -15,8 +15,8 @@ name = "kkachi"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Core kkachi library
-kkachi = { path = "../kkachi" }
+# Core kkachi library with API feature enabled
+kkachi = { path = "../kkachi", features = ["api"] }
 
 # Python bindings
 pyo3 = { workspace = true }
