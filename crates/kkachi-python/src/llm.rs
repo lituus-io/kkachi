@@ -62,9 +62,9 @@ impl PyApiLlm {
     ///     ```
     #[staticmethod]
     fn from_env() -> PyResult<Self> {
-        ApiLlm::from_env()
-            .map(|inner| Self { inner })
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create LLM from environment: {}", e)))
+        ApiLlm::from_env().map(|inner| Self { inner }).map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to create LLM from environment: {}", e))
+        })
     }
 
     /// Create an Anthropic Claude API client.
