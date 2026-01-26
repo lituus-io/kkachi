@@ -7,6 +7,51 @@
 //! This module provides the [`reason`] entry point for Chain of Thought prompting,
 //! where the LLM is guided to think step by step before providing a final answer.
 //!
+//! # How Answer Extraction Works
+//!
+//! The `reason()` function automatically detects whether to extract an answer:
+//!
+//! **With answer marker** ("Therefore:", "Answer:", etc.) - extracts the answer:
+//! ```
+//! use kkachi::recursive::{MockLlm, reason};
+//!
+//! let llm = MockLlm::new(|_, _| {
+//!     "Step 1: Calculate 25 * 30 = 750\n\
+//!      Step 2: Calculate 25 * 7 = 175\n\
+//!      Therefore: 925".to_string()
+//! });
+//!
+//! let result = reason(&llm, "What is 25 * 37?").go();
+//! assert_eq!(result.output, "925");  // Extracted answer
+//! assert!(result.reasoning().contains("Step 1"));  // Preserved reasoning
+//! ```
+//!
+//! **Without marker** (multi-line content) - preserves full response:
+//! ```
+//! use kkachi::recursive::{MockLlm, reason, checks};
+//!
+//! let llm = MockLlm::new(|_, _| {
+//!     "name: template\ntype: yaml\nconfig:\n  key: value".to_string()
+//! });
+//!
+//! let result = reason(&llm, "Generate YAML")
+//!     .validate(checks().require("config:"))
+//!     .go();
+//!
+//! // Full response preserved automatically!
+//! assert!(result.output.contains("name: template"));
+//! assert!(result.output.contains("config:"));
+//! ```
+//!
+//! # Use Cases
+//!
+//! Works seamlessly for:
+//! - Math problems with "Therefore: X"
+//! - Questions with "Answer: Y"
+//! - YAML/JSON generation
+//! - Code generation
+//! - Multi-line structured content
+//!
 //! # Examples
 //!
 //! ```
@@ -284,22 +329,9 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
             }
         }
 
-        // No marker found - use the whole response as the answer
-        // and try to extract reasoning from structure
-        if let Some(last_line_start) = response.rfind('\n') {
-            let reasoning = response[..last_line_start].trim();
-            let answer = response[last_line_start..].trim().to_string();
-            (
-                if reasoning.is_empty() {
-                    None
-                } else {
-                    Some(reasoning)
-                },
-                answer,
-            )
-        } else {
-            (None, response.trim().to_string())
-        }
+        // No marker found - use full response as answer (no reasoning extraction)
+        // This fixes multi-line content (YAML, code) while preserving single-line behavior
+        (None, response.trim().to_string())
     }
 }
 
@@ -460,5 +492,80 @@ mod tests {
         assert_eq!(result.output.trim(), "print(\"hello\")");
         assert!(!result.output.contains("```"));
         assert!(!result.output.contains("The code above"));
+    }
+
+    #[test]
+    fn test_reason_multiline_no_marker_preserves_full_output() {
+        // Bug fix test: multi-line without marker should preserve full content
+        let llm = MockLlm::new(|_, _| "Line 1\nLine 2\nLine 3\nLine 4".to_string());
+
+        let result = reason(&llm, "Generate multi-line content").go();
+
+        // Should preserve ALL lines (not just last line)
+        assert_eq!(result.output, "Line 1\nLine 2\nLine 3\nLine 4");
+        assert_eq!(result.output.lines().count(), 4);
+        assert!(result.output.contains("Line 1"));
+        assert!(result.output.contains("Line 4"));
+        // No reasoning when no marker found
+        assert!(result.reasoning.is_none());
+    }
+
+    #[test]
+    fn test_reason_with_marker_still_extracts() {
+        // Marker-based extraction still works
+        let llm = MockLlm::new(|_, _| "Step 1\nStep 2\nStep 3\nTherefore: 42".to_string());
+
+        let result = reason(&llm, "Solve problem").go();
+
+        // Should extract only the answer after marker
+        assert_eq!(result.output, "42");
+        // Reasoning should contain steps
+        assert!(result.reasoning().contains("Step 1"));
+        assert!(result.reasoning().contains("Step 3"));
+    }
+
+    #[test]
+    fn test_reason_multiline_yaml_no_marker() {
+        // Real-world test: YAML generation
+        let llm =
+            MockLlm::new(|_, _| "name: template\ntype: yaml\nconfig:\n  key: value".to_string());
+
+        let result = reason(&llm, "Generate YAML")
+            .validate(checks().require("name:").min_len(20))
+            .go();
+
+        // Full YAML should be preserved
+        assert!(result.output.contains("type: yaml"));
+        assert!(result.output.contains("config:"));
+        assert!(result.output.contains("key: value"));
+        assert_eq!(result.score, 1.0);
+    }
+
+    #[test]
+    fn test_reason_yaml_template_validation() {
+        // Integration test: complex YAML with validation
+        let llm = MockLlm::new(|_, _| {
+            "name: test\nruntime: yaml\n\nresources:\n  bucket:\n    type: storage.v1.bucket\n    properties:\n      name: test-bucket".to_string()
+        });
+
+        let result = reason(&llm, "Generate deployment YAML")
+            .validate(checks().min_len(50))
+            .go();
+
+        assert!(result.output.contains("resources:"));
+        assert!(result.output.contains("bucket:"));
+        assert!(result.output.lines().count() > 5);
+        assert_eq!(result.score, 1.0);
+    }
+
+    #[test]
+    fn test_reason_single_line_no_marker_unchanged() {
+        // Single line without marker
+        let llm = MockLlm::new(|_, _| "Simple answer".to_string());
+
+        let result = reason(&llm, "Question").go();
+
+        assert_eq!(result.output, "Simple answer");
+        assert!(result.reasoning.is_none());
     }
 }
