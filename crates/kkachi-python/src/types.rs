@@ -221,7 +221,9 @@ impl PyMemory {
 
         let new_inner = std::mem::replace(&mut self_.inner, memory())
             .persist(&path)
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to enable persistent storage: {}", e)))?;
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to enable persistent storage: {}", e))
+            })?;
 
         self_.inner = new_inner;
 
