@@ -155,6 +155,28 @@ impl PyMemory {
         self.inner.remove(id)
     }
 
+    /// Update an existing document's content.
+    ///
+    /// Args:
+    ///     id (str): Document ID to update
+    ///     content (str): New content for the document
+    ///
+    /// Returns:
+    ///     bool: True if document was found and updated, False otherwise
+    ///
+    /// Example:
+    ///     ```python
+    ///     from kkachi import Memory
+    ///
+    ///     mem = Memory()
+    ///     doc_id = mem.add("Old content")
+    ///     success = mem.update(doc_id, "New content")
+    ///     assert mem.get(doc_id) == "New content"
+    ///     ```
+    fn update(&mut self, id: String, content: String) -> bool {
+        self.inner.update(&id, &content)
+    }
+
     /// Get the number of documents.
     fn __len__(&self) -> usize {
         self.inner.len()
@@ -168,6 +190,44 @@ impl PyMemory {
     /// Get all tags in the store.
     fn tags(&self) -> Vec<String> {
         self.inner.tags()
+    }
+
+    /// Enable persistent storage using DuckDB.
+    ///
+    /// Args:
+    ///     path (str): Path to the DuckDB database file (e.g., "./memory.db")
+    ///
+    /// Returns:
+    ///     Memory: Self with persistent storage enabled
+    ///
+    /// Raises:
+    ///     RuntimeError: If storage initialization fails
+    ///
+    /// Example:
+    ///     ```python
+    ///     from kkachi import Memory
+    ///
+    ///     mem = Memory().persist("./my_knowledge.db")
+    ///     mem.add("Important document")
+    ///     # Data persists across program restarts
+    ///     ```
+    ///
+    /// Note:
+    ///     Requires the 'storage' feature to be enabled. The database file
+    ///     will be created if it doesn't exist.
+    #[cfg(feature = "storage")]
+    fn persist(mut self_: PyRefMut<'_, Self>, path: String) -> PyResult<Py<Self>> {
+        use pyo3::exceptions::PyRuntimeError;
+
+        let new_inner = std::mem::replace(&mut self_.inner, memory())
+            .persist(&path)
+            .map_err(|e| {
+                PyRuntimeError::new_err(format!("Failed to enable persistent storage: {}", e))
+            })?;
+
+        self_.inner = new_inner;
+
+        Ok(self_.into())
     }
 
     fn __repr__(&self) -> String {
