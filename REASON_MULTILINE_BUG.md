@@ -1,6 +1,6 @@
 # Kkachi `reason()` Multi-Line Output Bug
 
-**Status**: ✅ FIXED in PR [coming soon]
+**Status**: ✅ FIXED in PR [#4](https://github.com/lituus-io/kkachi/pull/4)
 **GitHub Issue**: [#3](https://github.com/lituus-io/kkachi/issues/3)
 **Fix**: One-line change to `parse_response()` - automatically preserves full response when no answer marker found
 
