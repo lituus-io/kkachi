@@ -32,6 +32,14 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install duckdb
 
+      - name: Set up library paths
+        run: |
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            echo "RUSTFLAGS=-L /opt/homebrew/lib -L /usr/local/lib" >> $GITHUB_ENV
+          else
+            echo "RUSTFLAGS=-L /usr/local/lib" >> $GITHUB_ENV
+          fi
+
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
@@ -44,8 +52,6 @@ jobs:
             unzip libduckdb.zip
             cp libduckdb.so /usr/local/lib/
             ldconfig
-        env:
-          RUSTFLAGS: "-L /usr/local/lib"
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
