@@ -28,30 +28,12 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install DuckDB (macOS)
-        if: runner.os == 'macOS'
-        run: brew install duckdb
-
-      - name: Set up library paths
-        run: |
-          if [ "$RUNNER_OS" == "macOS" ]; then
-            echo "RUSTFLAGS=-L /opt/homebrew/lib -L /usr/local/lib" >> $GITHUB_ENV
-          else
-            echo "RUSTFLAGS=-L /usr/local/lib" >> $GITHUB_ENV
-          fi
-
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
           working-directory: crates/kkachi-python
           args: --release --strip --out dist -i python${{ matrix.python-version }}
           manylinux: auto
-          before-script-linux: |
-            # Install DuckDB in manylinux container
-            curl -L https://github.com/duckdb/duckdb/releases/download/v1.4.3/libduckdb-linux-amd64.zip -o libduckdb.zip
-            unzip libduckdb.zip
-            cp libduckdb.so /usr/local/lib/
-            ldconfig
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4

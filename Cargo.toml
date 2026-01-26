@@ -54,8 +54,8 @@ dashmap = "6.1"
 string-interner = { version = "0.17", features = ["serde"] }
 
 # Storage
-# Use system DuckDB (install via: brew install duckdb on macOS)
-duckdb = { version = "1.0" }
+# Use bundled DuckDB (compiles from source, no system install needed)
+duckdb = { version = "=1.4.3", features = ["bundled"] }
 blake3 = "1.5"
 hex = "0.4"
 
