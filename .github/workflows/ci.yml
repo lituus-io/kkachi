@@ -88,11 +88,14 @@ jobs:
           unzip libduckdb-linux-amd64.zip -d duckdb
           sudo cp duckdb/libduckdb.so /usr/local/lib/
           sudo ldconfig
+          echo "DUCKDB_LIB=/usr/local/lib" >> $GITHUB_ENV
 
       - name: Install maturin
         run: pip install maturin
 
       - name: Build Python wheel
+        env:
+          RUSTFLAGS: "-L /usr/local/lib"
         run: |
           cd crates/kkachi-python
           maturin build --release --out dist
