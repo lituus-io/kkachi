@@ -36,6 +36,6 @@ futures = { workspace = true }
 pyo3 = { version = "0.22", features = ["auto-initialize"] }
 
 [features]
-default = []
+default = ["storage"]  # Enable storage by default for Python package
 # Enable storage features
 storage = ["kkachi/storage"]

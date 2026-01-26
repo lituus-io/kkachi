@@ -235,12 +235,27 @@ println!("Pareto front: {} solutions", result.front.len());
 
 ### Memory / RAG
 
-Store and retrieve examples for few-shot learning:
+Store and retrieve examples for few-shot learning, with optional persistent storage:
 
 ```rust
+use kkachi::recursive::prelude::*;
+
+// In-memory (default)
 let mut mem = memory();
 mem.add("fn read_file(p: &str) -> io::Result<String> { fs::read_to_string(p) }");
 mem.add("fn parse_json(s: &str) -> Result<Value, _> { serde_json::from_str(s) }");
+
+// Persistent storage (requires 'storage' feature)
+let mut mem = memory()
+    .persist("./knowledge_base.db")?;
+
+mem.add("fn config_reader() -> Result<Config> { /* ... */ }");
+
+// Full CRUD operations
+let doc_id = mem.add("Example code");
+let content = mem.get(&doc_id);          // Read
+mem.update(&doc_id, "Updated code");     // Update
+mem.remove(&doc_id);                     // Delete
 
 let result = refine(&llm, "Write a config file reader")
     .memory(&mut mem)
@@ -248,6 +263,25 @@ let result = refine(&llm, "Write a config file reader")
     .validate(checks().require("fn ").require("Result"))
     .learn_above(0.8)
     .go()?;
+
+// Data persists across program restarts
+```
+
+**Python**:
+```python
+from kkachi import Memory
+
+# Persistent storage
+mem = Memory().persist("./knowledge.db")
+
+# CRUD operations
+doc_id = mem.add("Example code here")
+content = mem.get(doc_id)                 # Read
+mem.update(doc_id, "Updated content")     # Update
+mem.remove(doc_id)                        # Delete
+
+# Search with semantic similarity
+results = mem.search("config reader", k=3)
 ```
 
 ## API Reference
