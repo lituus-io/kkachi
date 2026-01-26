@@ -78,16 +78,24 @@ println!("Answer: {} (agreement: {:.0}%)", result.output, consensus.agreement_ra
 
 ### Chain of Thought
 
-Step-by-step reasoning:
+Step-by-step reasoning with automatic answer extraction:
 
 ```rust
+// With answer marker - extracts the answer
 let result = reason(&llm, "A farmer has 17 sheep. All but 9 die. How many are left?")
     .validate(checks().regex(r"\d+"))
     .max_iter(3)
     .go();
 
 println!("Reasoning:\n{}", result.reasoning());
-println!("Answer: {}", result.output);
+println!("Answer: {}", result.output);  // "9" (extracted)
+
+// Multi-line content - preserves full response automatically
+let result = reason(&llm, "Generate a YAML config template")
+    .validate(checks().require("name:").require("config:").min_len(50))
+    .go();
+
+println!("Generated:\n{}", result.output);  // Full YAML preserved
 ```
 
 ### ReAct Agent
