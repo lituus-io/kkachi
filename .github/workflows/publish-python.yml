@@ -33,7 +33,7 @@ jobs:
         with:
           working-directory: crates/kkachi-python
           args: --release --strip --out dist -i python${{ matrix.python-version }}
-          manylinux: auto
+          manylinux: 2_31  # Modern GCC with C++11 ABI support for DuckDB
 
       - name: Upload wheel
         uses: actions/upload-artifact@v4
@@ -71,8 +71,14 @@ jobs:
           python -c "
           import kkachi
           print(f'kkachi {kkachi.__version__}')
-          from kkachi import Checks, Kkachi, RefineResult
+          from kkachi import Checks, Kkachi, RefineResult, Memory
           c = Checks().require('fn ').forbid('todo!')
+          # Test storage functionality
+          import tempfile, os
+          with tempfile.TemporaryDirectory() as tmpdir:
+              mem = Memory().persist(os.path.join(tmpdir, 'test.db'))
+              mem.add('Test document')
+              print('Storage test passed')
           print('All tests passed')
           "
 
