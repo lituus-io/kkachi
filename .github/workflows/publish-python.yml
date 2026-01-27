@@ -93,6 +93,8 @@ jobs:
               mem = Memory().persist(os.path.join(tmpdir, 'test.db'))
               mem.add('Test document')
               print('Storage test passed')
+              # Explicitly close connection (important on Windows)
+              del mem
           print('All tests passed')
           "
 
