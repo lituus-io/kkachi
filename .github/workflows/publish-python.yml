@@ -15,7 +15,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +42,13 @@ jobs:
           working-directory: crates/kkachi-python
           args: --release --strip --out dist -i python${{ matrix.python-version }}
 
+      - name: Build wheel (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/kkachi-python
+          args: --release --strip --out dist -i python${{ matrix.python-version }}
+
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
@@ -54,7 +61,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -70,11 +77,11 @@ jobs:
           path: dist/
 
       - name: List downloaded wheels
-        run: ls -la dist/
+        run: python -c "import os; print('\n'.join(os.listdir('dist')))"
 
       - name: Install and test
         run: |
-          pip install dist/*.whl
+          python -m pip install --find-links=dist kkachi
           python -c "
           import kkachi
           print(f'kkachi {kkachi.__version__}')
