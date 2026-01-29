@@ -1,5 +1,10 @@
 # Kkachi
 
+[![CI](https://github.com/lituus-io/kkachi/actions/workflows/ci.yml/badge.svg)](https://github.com/lituus-io/kkachi/actions/workflows/ci.yml)
+[![Python Package](https://github.com/lituus-io/kkachi/actions/workflows/publish-python.yml/badge.svg)](https://github.com/lituus-io/kkachi/actions/workflows/publish-python.yml)
+[![Python Versions](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://pypi.org/project/kkachi/)
+[![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue)](LICENSE)
+
 High-performance LLM prompt optimization library with iterative refinement, validation, and composable pipelines.
 
 ## Installation
@@ -283,6 +288,46 @@ mem.remove(doc_id)                        # Delete
 # Search with semantic similarity
 results = mem.search("config reader", k=3)
 ```
+
+### LLM Optimization (Python)
+
+Optimize API calls with caching, rate limiting, and retry:
+
+```python
+from kkachi import ApiLlm
+
+# Create LLM client with full optimization stack
+llm = (ApiLlm.from_env()
+       .with_cache(100)          # Cache 100 responses (LRU)
+       .with_rate_limit(10.0)    # Max 10 requests/second
+       .with_retry(3))           # Retry up to 3 times
+
+# Optimizations work transparently
+response = llm.generate("Your prompt here")
+```
+
+**Individual Optimizations**:
+
+```python
+# Cache only - reduce API costs
+llm = ApiLlm.from_env().with_cache(50)
+
+# Rate limiting only - prevent 429 errors
+llm = ApiLlm.anthropic(api_key, model).with_rate_limit(5.0)
+
+# Retry only - handle transient failures
+llm = ApiLlm.openai(api_key, model).with_retry(5)
+```
+
+**Benefits**:
+- **`with_cache(capacity)`**: LRU caching for identical prompts → reduce API costs
+- **`with_rate_limit(rps)`**: Token bucket rate limiting → prevent 429 errors
+- **`with_retry(max_retries)`**: Exponential backoff retry → handle transient failures
+
+**Recommended Patterns**:
+- Development: `llm.with_cache(50)` (fast iteration)
+- Testing: `llm.with_cache(50).with_retry(3)` (repeatable + resilient)
+- Production: `llm.with_cache(100).with_rate_limit(10.0).with_retry(3)` (full optimization)
 
 ## API Reference
 

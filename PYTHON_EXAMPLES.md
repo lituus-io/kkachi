@@ -5,12 +5,36 @@ Python bindings for the Kkachi LLM prompt optimization library.
 ## Installation
 
 ```bash
-pip install kkachi anthropic
+pip install kkachi
 ```
 
 ## Setup
 
-Kkachi's DSPy-style builders accept any callable `(prompt, feedback) -> str` as an LLM:
+### Option 1: Built-in ApiLlm (Recommended)
+
+Use the built-in `ApiLlm` with automatic provider detection and optimization features:
+
+```python
+from kkachi import ApiLlm
+
+# Auto-detect from environment (ANTHROPIC_API_KEY or OPENAI_API_KEY)
+llm = ApiLlm.from_env()
+
+# Or specify provider explicitly
+llm = ApiLlm.anthropic("sk-ant-...", "claude-sonnet-4-20250514")
+llm = ApiLlm.openai("sk-...", "gpt-4o")
+llm = ApiLlm.claude_code()  # Local Claude CLI (no API key needed)
+
+# Add optimizations (recommended for production)
+llm = (ApiLlm.from_env()
+       .with_cache(100)          # Cache 100 responses
+       .with_rate_limit(10.0)    # Max 10 req/sec
+       .with_retry(3))           # Retry up to 3 times
+```
+
+### Option 2: Custom LLM Callable
+
+Kkachi's DSPy-style builders also accept any callable `(prompt, feedback) -> str` as an LLM:
 
 ```python
 import anthropic
@@ -48,6 +72,65 @@ print(result.output)
 
 > **Note:** `Kkachi.refine().run()` takes a callable `(iteration, prompt, feedback) -> str`.
 > The DSPy-style builders below use the simpler `(prompt, feedback) -> str` signature.
+
+## LLM Optimization
+
+Optimize API calls with caching, rate limiting, and automatic retry:
+
+### Cache Responses (LRU)
+
+```python
+from kkachi import ApiLlm
+
+# Cache 100 responses using LRU eviction
+llm = ApiLlm.from_env().with_cache(100)
+
+# First call hits the API
+response1 = llm.generate("Hello")
+
+# Second identical call returns cached result (instant, no API call)
+response2 = llm.generate("Hello")
+```
+
+### Rate Limiting (Token Bucket)
+
+```python
+# Limit to 10 requests per second (prevents 429 errors)
+llm = ApiLlm.from_env().with_rate_limit(10.0)
+
+# These calls will be automatically paced
+for i in range(20):
+    response = llm.generate(f"Question {i}")
+```
+
+### Automatic Retry (Exponential Backoff)
+
+```python
+# Retry up to 3 times on transient errors (429, 500, 502, 503, timeouts)
+llm = ApiLlm.from_env().with_retry(3)
+
+# Automatically retries with exponential backoff (500ms → 1s → 2s → ...)
+response = llm.generate("Your prompt")
+```
+
+### Recommended Patterns
+
+```python
+# Development: Cache only (fast iteration)
+llm = ApiLlm.from_env().with_cache(50)
+
+# Testing: Cache + Retry (repeatable + resilient)
+llm = ApiLlm.from_env().with_cache(50).with_retry(3)
+
+# Production: Full stack (maximum optimization)
+llm = (ApiLlm.from_env()
+       .with_cache(100)
+       .with_rate_limit(10.0)
+       .with_retry(3))
+
+# High-load: Rate limit + Retry (prevent overload)
+llm = ApiLlm.from_env().with_rate_limit(5.0).with_retry(5)
+```
 
 ## Features
 
@@ -244,12 +327,24 @@ data = template.parse_json('{"code": "fn parse() {}"}')
 
 | Function | Description |
 |----------|-------------|
+| `ApiLlm.from_env()` | Auto-detect LLM provider from environment |
+| `ApiLlm.anthropic(key, model)` | Create Anthropic Claude client |
+| `ApiLlm.openai(key, model)` | Create OpenAI client |
+| `ApiLlm.claude_code()` | Use local Claude CLI (no API key) |
 | `Kkachi.refine(prompt).run(fn)` | Iterative refinement (`fn(iter, prompt, feedback) -> str`) |
 | `reason(llm, prompt)` | Chain of Thought reasoning |
 | `best_of(llm, prompt, n)` | Best of N candidate selection |
 | `ensemble(llm, prompt, n)` | Multi-chain ensemble voting |
 | `agent(llm, goal)` | ReAct agent with tools |
 | `program(llm, problem)` | Code generation + execution |
+
+### LLM Optimizations
+
+| Method | Description |
+|--------|-------------|
+| `.with_cache(capacity)` | LRU caching for identical prompts (reduces API costs) |
+| `.with_rate_limit(rps)` | Token bucket rate limiting (prevents 429 errors) |
+| `.with_retry(max_retries)` | Exponential backoff retry (handles transient failures) |
 
 ### Validators
 
@@ -274,9 +369,31 @@ data = template.parse_json('{"code": "fn parse() {}"}')
 | `AgentResult` | `output`, `steps`, `success`, `trajectory()` |
 | `ProgramResult` | `output`, `code`, `attempts`, `success` |
 
-### LLM Callable
+### LLM Options
 
-DSPy-style builders use `(prompt: str, feedback: str = None) -> str`:
+**Option 1: Built-in ApiLlm (Recommended)**
+
+```python
+from kkachi import ApiLlm
+
+# Auto-detect from environment
+llm = ApiLlm.from_env()
+
+# With optimizations
+llm = (ApiLlm.from_env()
+       .with_cache(100)
+       .with_rate_limit(10.0)
+       .with_retry(3))
+
+# Explicit provider
+llm = ApiLlm.anthropic("sk-ant-...", "claude-sonnet-4-20250514")
+llm = ApiLlm.openai("sk-...", "gpt-4o")
+llm = ApiLlm.claude_code()  # Local CLI
+```
+
+**Option 2: Custom Callable**
+
+DSPy-style builders also accept `(prompt: str, feedback: str = None) -> str`:
 
 ```python
 # Anthropic
