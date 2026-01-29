@@ -128,7 +128,7 @@ impl PyCliValidator {
     /// ```
     #[pyo3(name = "and_")]
     fn and_compose(&self, other: &Bound<'_, PyAny>) -> PyResult<crate::compose::PyValidator> {
-        use crate::compose::{extract_validator_node, ValidatorNode, PyValidator};
+        use crate::compose::{extract_validator_node, PyValidator, ValidatorNode};
         let self_node = ValidatorNode::Cli(self.inner.clone());
         let other_node = extract_validator_node(other)?;
         Ok(PyValidator {
@@ -149,7 +149,7 @@ impl PyCliValidator {
     /// ```
     #[pyo3(name = "or_")]
     fn or_compose(&self, other: &Bound<'_, PyAny>) -> PyResult<crate::compose::PyValidator> {
-        use crate::compose::{extract_validator_node, ValidatorNode, PyValidator};
+        use crate::compose::{extract_validator_node, PyValidator, ValidatorNode};
         let self_node = ValidatorNode::Cli(self.inner.clone());
         let other_node = extract_validator_node(other)?;
         Ok(PyValidator {

@@ -4,11 +4,11 @@
 
 //! Python bindings for Jinja2 template support.
 
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use pyo3::exceptions::PyRuntimeError;
 
-use kkachi::declarative::{JinjaTemplate, JinjaFormatter};
+use kkachi::declarative::{JinjaFormatter, JinjaTemplate};
 use minijinja;
 
 // ============================================================================
@@ -188,7 +188,10 @@ impl PyJinjaTemplate {
             })
             .collect::<PyResult<Vec<_>>>()?;
 
-        let pairs_ref: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let pairs_ref: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
 
         self.inner
             .render_strings(&pairs_ref)
