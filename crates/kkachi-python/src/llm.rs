@@ -49,7 +49,14 @@ pub enum LlmVariant {
 // Implement Llm trait for LlmVariant to forward calls to the wrapped LLM
 impl kkachi::recursive::llm::Llm for LlmVariant {
     type GenerateFut<'a>
-        = std::pin::Pin<Box<dyn std::future::Future<Output = kkachi::error::Result<kkachi::recursive::llm::LmOutput>> + Send + 'a>>
+        = std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = kkachi::error::Result<kkachi::recursive::llm::LmOutput>,
+                > + Send
+                + 'a,
+        >,
+    >
     where
         Self: 'a;
 
@@ -67,7 +74,9 @@ impl kkachi::recursive::llm::Llm for LlmVariant {
             LlmVariant::RateLimitedCached(llm) => Box::pin(llm.generate(prompt, context, feedback)),
             LlmVariant::RetryCached(llm) => Box::pin(llm.generate(prompt, context, feedback)),
             LlmVariant::RetryRateLimited(llm) => Box::pin(llm.generate(prompt, context, feedback)),
-            LlmVariant::RetryRateLimitedCached(llm) => Box::pin(llm.generate(prompt, context, feedback)),
+            LlmVariant::RetryRateLimitedCached(llm) => {
+                Box::pin(llm.generate(prompt, context, feedback))
+            }
         }
     }
 
@@ -366,8 +375,12 @@ impl PyApiLlm {
         let old_inner = mem::replace(&mut self_.inner, LlmVariant::Plain(ApiLlm::claude_code()));
 
         let new_inner = match old_inner {
-            LlmVariant::Plain(llm) => LlmVariant::RateLimited(llm.with_rate_limit(requests_per_second)),
-            LlmVariant::Cached(llm) => LlmVariant::RateLimitedCached(llm.with_rate_limit(requests_per_second)),
+            LlmVariant::Plain(llm) => {
+                LlmVariant::RateLimited(llm.with_rate_limit(requests_per_second))
+            }
+            LlmVariant::Cached(llm) => {
+                LlmVariant::RateLimitedCached(llm.with_rate_limit(requests_per_second))
+            }
             // Already rate limited or must be applied before retry - keep as-is
             other => other,
         };
@@ -402,8 +415,12 @@ impl PyApiLlm {
         let new_inner = match old_inner {
             LlmVariant::Plain(llm) => LlmVariant::Retry(llm.with_retry(max_retries)),
             LlmVariant::Cached(llm) => LlmVariant::RetryCached(llm.with_retry(max_retries)),
-            LlmVariant::RateLimited(llm) => LlmVariant::RetryRateLimited(llm.with_retry(max_retries)),
-            LlmVariant::RateLimitedCached(llm) => LlmVariant::RetryRateLimitedCached(llm.with_retry(max_retries)),
+            LlmVariant::RateLimited(llm) => {
+                LlmVariant::RetryRateLimited(llm.with_retry(max_retries))
+            }
+            LlmVariant::RateLimitedCached(llm) => {
+                LlmVariant::RetryRateLimitedCached(llm.with_retry(max_retries))
+            }
             // Already has retry - keep as-is (ignore new config)
             other => other,
         };
