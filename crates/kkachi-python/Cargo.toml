@@ -21,6 +21,9 @@ kkachi = { path = "../kkachi", features = ["api"] }
 # Python bindings
 pyo3 = { workspace = true }
 
+# Jinja template support
+minijinja = { workspace = true }
+
 # Serialization for Python objects
 serde = { workspace = true }
 serde_json = { workspace = true }

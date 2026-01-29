@@ -34,6 +34,7 @@ mod builder;
 mod checks;
 mod compose;
 mod dspy;
+mod jinja;
 mod llm;
 mod rewrite;
 mod semantic;
@@ -45,6 +46,7 @@ use builder::*;
 use checks::*;
 use compose::*;
 use dspy::*;
+use jinja::*;
 use llm::*;
 use rewrite::*;
 use semantic::*;
@@ -82,6 +84,10 @@ fn _kkachi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTemplate>()?;
     m.add_class::<PyFormatType>()?;
     m.add_class::<PyPromptTone>()?;
+
+    // Jinja template system
+    m.add_class::<PyJinjaTemplate>()?;
+    m.add_class::<PyJinjaFormatter>()?;
 
     // Rewrite utilities
     m.add_class::<PyRewrite>()?;

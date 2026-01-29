@@ -184,6 +184,145 @@ class Template:
     def signature(self) -> str: ...
 
 # =============================================================================
+# Jinja Template System
+# =============================================================================
+
+class JinjaTemplate:
+    """Jinja2-compatible template for dynamic prompt generation.
+
+    Example:
+        # Load from file
+        template = JinjaTemplate.from_file("./templates/prompt.j2")
+
+        # Or create from string
+        template = JinjaTemplate.from_str("code_gen", '''
+        ## Task
+        {{ task }}
+
+        {% if examples %}
+        ## Examples
+        {% for ex in examples %}
+        - {{ ex }}
+        {% endfor %}
+        {% endif %}
+        ''')
+
+        # Render with context
+        output = template.render({
+            "task": "Write a parser",
+            "examples": ["Example 1", "Example 2"]
+        })
+    """
+
+    @staticmethod
+    def from_file(path: str) -> JinjaTemplate:
+        """Load a template from a file.
+
+        Args:
+            path: Path to template file (e.g., "./templates/prompt.j2")
+
+        Returns:
+            Loaded template
+
+        Raises:
+            RuntimeError: If file cannot be read or template is invalid
+        """
+        ...
+
+    @staticmethod
+    def from_str(name: str, content: str) -> JinjaTemplate:
+        """Create a template from a string.
+
+        Args:
+            name: Template name for identification
+            content: Jinja2 template content
+
+        Returns:
+            Created template
+
+        Raises:
+            RuntimeError: If template syntax is invalid
+        """
+        ...
+
+    def name(self) -> str:
+        """Get the template name."""
+        ...
+
+    def render(self, context: Dict[str, Any]) -> str:
+        """Render the template with a context dictionary.
+
+        Supports nested structures (dicts, lists, primitives).
+
+        Args:
+            context: Variables for template rendering
+
+        Returns:
+            Rendered output
+
+        Example:
+            output = template.render({
+                "name": "Alice",
+                "items": ["item1", "item2"],
+                "config": {"debug": True}
+            })
+        """
+        ...
+
+    def render_strings(self, **kwargs: str) -> str:
+        """Render with simple string-to-string mappings (convenience method).
+
+        Args:
+            **kwargs: Keyword arguments as template variables
+
+        Returns:
+            Rendered output
+
+        Example:
+            output = template.render_strings(task="Write code", language="Rust")
+        """
+        ...
+
+class JinjaFormatter:
+    """Prompt formatter using Jinja2 templates for refinement loops.
+
+    The formatter receives three variables at each iteration:
+    - task: The original prompt/task
+    - feedback: Feedback from previous iteration (empty string if none)
+    - iteration: Current iteration number (0-indexed)
+
+    Example:
+        template = JinjaTemplate.from_str("refine", '''
+        ## Task
+        {{ task }}
+
+        {% if feedback %}
+        ## Feedback from Previous Attempt
+        {{ feedback }}
+        {% endif %}
+
+        ## Iteration
+        This is attempt #{{ iteration + 1 }}
+        ''')
+
+        formatter = JinjaFormatter(template)
+
+        # Use with DSPy-style builders
+        result = reason(llm, "Write a parser") \\
+            .with_formatter(formatter) \\
+            .validate(Checks().require("fn ")) \\
+            .go()
+    """
+
+    def __init__(self, template: JinjaTemplate) -> None:
+        """Create a formatter from a template.
+
+        Args:
+            template: The template to use for formatting
+        """
+        ...
+
+# =============================================================================
 # Legacy types
 # =============================================================================
 

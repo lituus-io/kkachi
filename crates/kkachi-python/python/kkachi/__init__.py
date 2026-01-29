@@ -40,6 +40,9 @@ from kkachi._kkachi import (
     Template,
     FormatType,
     PromptTone,
+    # Jinja template system
+    JinjaTemplate,
+    JinjaFormatter,
     # Memory / RAG
     Memory,
     Recall,
@@ -96,6 +99,9 @@ __all__ = [
     "Template",
     "FormatType",
     "PromptTone",
+    # Jinja template system
+    "JinjaTemplate",
+    "JinjaFormatter",
     # Memory / RAG
     "Memory",
     "Recall",

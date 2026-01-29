@@ -38,6 +38,7 @@ use crate::error::{Error, Result};
 /// - Control flow: `{% if condition %}...{% endif %}`
 /// - Loops: `{% for item in items %}...{% endfor %}`
 /// - Defaults: `{{ value | default("fallback") }}`
+#[derive(Clone)]
 pub struct JinjaTemplate {
     /// Template environment.
     env: Environment<'static>,
@@ -221,6 +222,7 @@ impl JinjaTemplate {
 /// assert!(result.contains("Write a Rust HTTP client"));
 /// assert!(result.contains("Must compile"));
 /// ```
+#[derive(Clone)]
 pub struct JinjaFormatter {
     template: JinjaTemplate,
 }

@@ -115,6 +115,48 @@ impl PyCliValidator {
         }
     }
 
+    /// Compose with AND semantics (both must pass).
+    ///
+    /// # Example
+    ///
+    /// ```python
+    /// from kkachi import CliValidator, Checks
+    ///
+    /// cli = CliValidator("rustfmt").args(["--check"])
+    /// checks = Checks().require("fn ")
+    /// combined = cli.and_(checks)
+    /// ```
+    #[pyo3(name = "and_")]
+    fn and_compose(&self, other: &Bound<'_, PyAny>) -> PyResult<crate::compose::PyValidator> {
+        use crate::compose::{extract_validator_node, ValidatorNode, PyValidator};
+        let self_node = ValidatorNode::Cli(self.inner.clone());
+        let other_node = extract_validator_node(other)?;
+        Ok(PyValidator {
+            node: ValidatorNode::And(Box::new(self_node), Box::new(other_node)),
+        })
+    }
+
+    /// Compose with OR semantics (at least one must pass).
+    ///
+    /// # Example
+    ///
+    /// ```python
+    /// from kkachi import CliValidator, Checks
+    ///
+    /// cli = CliValidator("rustfmt").args(["--check"])
+    /// checks = Checks().forbid("panic!")
+    /// combined = cli.or_(checks)
+    /// ```
+    #[pyo3(name = "or_")]
+    fn or_compose(&self, other: &Bound<'_, PyAny>) -> PyResult<crate::compose::PyValidator> {
+        use crate::compose::{extract_validator_node, ValidatorNode, PyValidator};
+        let self_node = ValidatorNode::Cli(self.inner.clone());
+        let other_node = extract_validator_node(other)?;
+        Ok(PyValidator {
+            node: ValidatorNode::Or(Box::new(self_node), Box::new(other_node)),
+        })
+    }
+
     fn __repr__(&self) -> String {
         "CliValidator(...)".to_string()
     }
