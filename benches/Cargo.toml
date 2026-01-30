@@ -7,8 +7,14 @@ publish = false
 [dependencies]
 kkachi = { path = "../crates/kkachi" }
 criterion = { workspace = true }
+tokio = { workspace = true }
 
 [[bench]]
 name = "performance"
 path = "performance.rs"
+harness = false
+
+[[bench]]
+name = "cache_benchmark"
+path = "cache_benchmark.rs"
 harness = false
