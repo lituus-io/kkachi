@@ -9,7 +9,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use kkachi::declarative::{JinjaFormatter, JinjaTemplate};
-use minijinja;
 
 // ============================================================================
 // Value Conversion: minijinja::Value ↔ PyObject
@@ -241,6 +240,7 @@ impl PyJinjaTemplate {
 #[pyclass(name = "JinjaFormatter")]
 #[derive(Clone)]
 pub struct PyJinjaFormatter {
+    #[allow(dead_code)] // TODO: Expose formatter methods to Python
     inner: JinjaFormatter,
 }
 
@@ -267,6 +267,7 @@ impl PyJinjaFormatter {
 
 // Internal trait implementation for use in builders
 impl PyJinjaFormatter {
+    #[allow(dead_code)] // TODO: Use in builder pattern
     pub(crate) fn into_inner(self) -> JinjaFormatter {
         self.inner
     }

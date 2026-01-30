@@ -5,101 +5,36 @@
 *.pdb
 Cargo.lock
 
-# Debug
-debug/
-*.dSYM/
-*.su
-*.idb
-
-# IDE and editors
-.vscode/
+# IDE
 .idea/
+.vscode/
 *.swp
 *.swo
 *~
 .DS_Store
-Thumbs.db
-*.sublime-project
-*.sublime-workspace
 
-# Profiling
-perf.data
-perf.data.old
-flamegraph.svg
-*.profraw
-*.profdata
-
-# Coverage
-*.gcov
-*.gcda
-*.gcno
-lcov.info
-tarpaulin-report.html
-coverage/
-
-# Documentation build
-/doc/
-*.pdf
-
-# Cache
-*.bin
-.cache/
-
-# ONNX models (downloaded for testing)
-/models/
-
-# Build artifacts
-/dist/
-/pkg/
-node_modules/
-*.wasm
-
-# Test outputs
-/test_outputs/
-*.log
-*.tmp
-*.temp
-
-# Database files
-*.db
-*.db-shm
-*.db-wal
-*.duckdb
-
-# Environment
-.env
-.env.local
-.env.*.local
-*.pem
-*.key
-
-# OS files
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-
-# Python (for kkachi-python bindings)
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
+dist/
+build/
 .venv/
 venv/
-ENV/
 
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.hypothesis/
+
+# Benchmarks
+target/criterion/
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/

@@ -21,6 +21,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 #[cfg(feature = "storage")]
 use crate::error::{Error, Result};
@@ -106,26 +107,26 @@ impl Embedder for HashEmbedder {
 #[derive(Debug, Clone)]
 pub struct Document {
     /// Unique identifier.
-    pub id: String,
+    pub id: Arc<str>,
     /// The document content.
-    pub content: String,
+    pub content: Arc<str>,
     /// Pre-computed embedding.
     pub embedding: Vec<f32>,
     /// Optional tag for categorization.
-    pub tag: Option<String>,
+    pub tag: Option<Arc<str>>,
 }
 
 /// A search result from memory.
 #[derive(Debug, Clone)]
 pub struct Recall {
     /// Document identifier.
-    pub id: String,
+    pub id: Arc<str>,
     /// Document content.
-    pub content: String,
+    pub content: Arc<str>,
     /// Similarity score (0.0 to 1.0).
     pub score: f64,
     /// Optional tag.
-    pub tag: Option<String>,
+    pub tag: Option<Arc<str>>,
 }
 
 /// In-memory document storage.
@@ -146,10 +147,10 @@ impl InMemoryStore {
         let id = format!("doc:{}", self.next_id);
         self.next_id += 1;
         self.documents.push(Document {
-            id: id.clone(),
-            content,
+            id: Arc::from(id.as_str()),
+            content: Arc::from(content.as_str()),
             embedding,
-            tag,
+            tag: tag.map(|t| Arc::from(t.as_str())),
         });
         id
     }
@@ -162,17 +163,18 @@ impl InMemoryStore {
         tag: Option<String>,
     ) {
         // Remove existing document with same ID
-        self.documents.retain(|d| d.id != id);
+        let id_arc: Arc<str> = Arc::from(id.as_str());
+        self.documents.retain(|d| d.id != id_arc);
         self.documents.push(Document {
-            id,
-            content,
+            id: id_arc,
+            content: Arc::from(content.as_str()),
             embedding,
-            tag,
+            tag: tag.map(|t| Arc::from(t.as_str())),
         });
     }
 
     fn get(&self, id: &str) -> Option<&Document> {
-        self.documents.iter().find(|d| d.id == id)
+        self.documents.iter().find(|d| d.id.as_ref() == id)
     }
 
     fn search(&self, query_embedding: &[f32], k: usize) -> Vec<Recall> {
@@ -200,8 +202,8 @@ impl InMemoryStore {
     }
 
     fn update(&mut self, id: &str, content: String, embedding: Vec<f32>) -> bool {
-        if let Some(doc) = self.documents.iter_mut().find(|d| d.id == id) {
-            doc.content = content;
+        if let Some(doc) = self.documents.iter_mut().find(|d| d.id.as_ref() == id) {
+            doc.content = Arc::from(content.as_str());
             doc.embedding = embedding;
             true
         } else {
@@ -211,7 +213,7 @@ impl InMemoryStore {
 
     fn remove(&mut self, id: &str) -> bool {
         let len_before = self.documents.len();
-        self.documents.retain(|d| d.id != id);
+        self.documents.retain(|d| d.id.as_ref() != id);
         self.documents.len() < len_before
     }
 
@@ -240,7 +242,7 @@ impl InMemoryStore {
         let mut tags: Vec<_> = self
             .documents
             .iter()
-            .filter_map(|d| d.tag.clone())
+            .filter_map(|d| d.tag.as_ref().map(|t| t.to_string()))
             .collect();
         tags.sort();
         tags.dedup();
@@ -530,7 +532,7 @@ impl<E: Embedder> Memory<E> {
         let dimension = self.embedder.dimension();
 
         // Create tables if they don't exist
-        conn.execute_batch(&format!(
+        conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS documents (
                 id TEXT PRIMARY KEY,
@@ -539,8 +541,8 @@ impl<E: Embedder> Memory<E> {
                 tag TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_documents_tag ON documents(tag);
-            "#
-        ))
+            "#,
+        )
         .map_err(|e| Error::storage(e.to_string()))?;
 
         self.store = MemoryStore::Persistent { conn, dimension };
@@ -626,7 +628,7 @@ impl<E: Embedder> Memory<E> {
     /// Get a document by ID.
     pub fn get(&self, id: &str) -> Option<String> {
         match &self.store {
-            MemoryStore::InMemory(store) => store.get(id).map(|d| d.content.clone()),
+            MemoryStore::InMemory(store) => store.get(id).map(|d| d.content.to_string()),
             #[cfg(feature = "storage")]
             MemoryStore::Persistent { conn, .. } => {
                 let mut stmt = conn
@@ -667,10 +669,10 @@ impl<E: Embedder> Memory<E> {
                         let embedding = bytes_to_embedding(&embedding_bytes, *dimension);
                         let score = cosine_similarity(&query_embedding, &embedding);
                         Ok(Recall {
-                            id,
-                            content,
+                            id: Arc::from(id.as_str()),
+                            content: Arc::from(content.as_str()),
                             score,
-                            tag,
+                            tag: tag.map(|t| Arc::from(t.as_str())),
                         })
                     })
                     .unwrap()
@@ -812,10 +814,10 @@ impl<E: Embedder> Memory<E> {
             .into_iter()
             .filter_map(|(idx, score)| {
                 docs.get(idx).map(|(id, content, _, tag)| Recall {
-                    id: id.clone(),
-                    content: content.clone(),
+                    id: Arc::from(id.as_str()),
+                    content: Arc::from(content.as_str()),
                     score,
-                    tag: tag.clone(),
+                    tag: tag.as_ref().map(|t| Arc::from(t.as_str())),
                 })
             })
             .collect()
