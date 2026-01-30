@@ -1,6 +1,19 @@
 # Kkachi Python Examples
 
-Python bindings for the Kkachi LLM prompt optimization library.
+Comprehensive examples for using kkachi in Python.
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [API Client Setup](#api-client-setup)
+- [Iterative Refinement](#iterative-refinement)
+- [Best-of-N Selection](#best-of-n-selection)
+- [Memory & RAG](#memory--rag)
+- [CLI Validators](#cli-validators)
+- [Jinja2 Templates](#jinja2-templates)
+- [Ensemble & Voting](#ensemble--voting)
+- [Complete Workflow](#complete-workflow)
 
 ## Installation
 
@@ -8,417 +21,640 @@ Python bindings for the Kkachi LLM prompt optimization library.
 pip install kkachi
 ```
 
-## Setup
-
-### Option 1: Built-in ApiLlm (Recommended)
-
-Use the built-in `ApiLlm` with automatic provider detection and optimization features:
-
-```python
-from kkachi import ApiLlm
-
-# Auto-detect from environment (ANTHROPIC_API_KEY or OPENAI_API_KEY)
-llm = ApiLlm.from_env()
-
-# Or specify provider explicitly
-llm = ApiLlm.anthropic("sk-ant-...", "claude-sonnet-4-20250514")
-llm = ApiLlm.openai("sk-...", "gpt-4o")
-llm = ApiLlm.claude_code()  # Local Claude CLI (no API key needed)
-
-# Add optimizations (recommended for production)
-llm = (ApiLlm.from_env()
-       .with_cache(100)          # Cache 100 responses
-       .with_rate_limit(10.0)    # Max 10 req/sec
-       .with_retry(3))           # Retry up to 3 times
-```
-
-### Option 2: Custom LLM Callable
-
-Kkachi's DSPy-style builders also accept any callable `(prompt, feedback) -> str` as an LLM:
-
-```python
-import anthropic
-
-client = anthropic.Anthropic()  # uses ANTHROPIC_API_KEY
-
-def llm(prompt: str, feedback: str = None) -> str:
-    messages = [{"role": "user", "content": prompt}]
-    if feedback:
-        messages.append({"role": "user", "content": f"Feedback: {feedback}"})
-    response = client.messages.create(
-        model="your-model-id",
-        max_tokens=4096,
-        messages=messages,
-    )
-    return response.content[0].text
-```
-
 ## Quick Start
 
 ```python
-from kkachi import Kkachi
+from kkachi import refine, Checks, ApiLlm
 
-result = Kkachi.refine("Write a URL parser in Rust") \
-    .require("fn ") \
-    .require("Result") \
-    .forbid(".unwrap()") \
+# Create LLM client (auto-detects from environment)
+llm = ApiLlm.from_env()
+
+# Generate with iterative refinement
+result = refine(llm, "Write a Python function to parse URLs") \
+    .validate(
+        Checks()
+            .require("def ")
+            .require("return")
+            .forbid("eval(")
+            .min_len(50)
+    ) \
     .max_iter(5) \
     .target(0.9) \
-    .run(lambda i, prompt, feedback: llm(prompt, feedback))
+    .go()
 
-print(f"Score: {result.score:.0%} after {result.iterations} iterations")
-print(result.output)
+print(f"Score: {result.score * 100:.0f}%")
+print(f"Iterations: {result.iterations}")
+print(f"Output:\n{result.output}")
 ```
 
-> **Note:** `Kkachi.refine().run()` takes a callable `(iteration, prompt, feedback) -> str`.
-> The DSPy-style builders below use the simpler `(prompt, feedback) -> str` signature.
+## API Client Setup
 
-## LLM Optimization
-
-Optimize API calls with caching, rate limiting, and automatic retry:
-
-### Cache Responses (LRU)
+### Auto-Detection from Environment
 
 ```python
 from kkachi import ApiLlm
 
-# Cache 100 responses using LRU eviction
-llm = ApiLlm.from_env().with_cache(100)
-
-# First call hits the API
-response1 = llm.generate("Hello")
-
-# Second identical call returns cached result (instant, no API call)
-response2 = llm.generate("Hello")
+# Automatically detects ANTHROPIC_API_KEY, OPENAI_API_KEY, or Claude CLI
+llm = ApiLlm.from_env()
+print(f"Using: {llm.model_name()}")
 ```
 
-### Rate Limiting (Token Bucket)
+### Anthropic Claude
 
 ```python
-# Limit to 10 requests per second (prevents 429 errors)
-llm = ApiLlm.from_env().with_rate_limit(10.0)
-
-# These calls will be automatically paced
-for i in range(20):
-    response = llm.generate(f"Question {i}")
+llm = ApiLlm.anthropic(
+    api_key="sk-ant-...",
+    model="claude-sonnet-4-20250514"
+)
 ```
 
-### Automatic Retry (Exponential Backoff)
+### OpenAI
 
 ```python
-# Retry up to 3 times on transient errors (429, 500, 502, 503, timeouts)
-llm = ApiLlm.from_env().with_retry(3)
-
-# Automatically retries with exponential backoff (500ms → 1s → 2s → ...)
-response = llm.generate("Your prompt")
+llm = ApiLlm.openai(
+    api_key="sk-...",
+    model="gpt-4o"
+)
 ```
 
-### Recommended Patterns
+### Claude Code CLI (No API Key)
 
 ```python
-# Development: Cache only (fast iteration)
-llm = ApiLlm.from_env().with_cache(50)
-
-# Testing: Cache + Retry (repeatable + resilient)
-llm = ApiLlm.from_env().with_cache(50).with_retry(3)
-
-# Production: Full stack (maximum optimization)
-llm = (ApiLlm.from_env()
-       .with_cache(100)
-       .with_rate_limit(10.0)
-       .with_retry(3))
-
-# High-load: Rate limit + Retry (prevent overload)
-llm = ApiLlm.from_env().with_rate_limit(5.0).with_retry(5)
+# Uses locally installed 'claude' CLI
+llm = ApiLlm.claude_code()
 ```
 
-## Features
-
-### Iterative Refinement
+### Custom Endpoints
 
 ```python
-from kkachi import Kkachi
+# Together.ai (OpenAI-compatible)
+llm = ApiLlm.openai_with_url(
+    api_key="your-together-key",
+    model="meta-llama/Llama-3-70b-chat-hf",
+    base_url="https://api.together.xyz"
+)
 
-result = Kkachi.refine("Write a binary search in Rust") \
-    .require("fn ") \
-    .require("-> Option<usize>") \
-    .forbid(".unwrap()") \
-    .min_len(100) \
+# Groq (OpenAI-compatible)
+llm = ApiLlm.openai_with_url(
+    api_key="your-groq-key",
+    model="llama3-70b-8192",
+    base_url="https://api.groq.com/openai"
+)
+```
+
+## Iterative Refinement
+
+### Basic Refinement
+
+```python
+from kkachi import refine, Checks, ApiLlm
+
+llm = ApiLlm.from_env()
+
+result = refine(llm, "Write a function to validate email addresses") \
+    .validate(
+        Checks()
+            .require("def validate_email")
+            .require("@")
+            .require("return")
+            .forbid("eval")
+            .min_len(100)
+    ) \
+    .max_iter(10) \
+    .target(0.95) \
+    .go()
+
+print(f"Final score: {result.score:.2%}")
+print(f"Took {result.iterations} iterations")
+```
+
+### Adaptive Target
+
+Automatically increase target if easily achieved:
+
+```python
+result = refine(llm, "Write a sorting algorithm") \
+    .validate(Checks().require("def sort").min_len(50)) \
     .max_iter(5) \
-    .target(1.0) \
-    .run(lambda i, prompt, feedback: llm(prompt, feedback))
-
-print(f"Score: {result.score:.2f}, Iterations: {result.iterations}")
+    .adaptive(0.8)  # Start at 80%, increase if achieved quickly
+    .go()
 ```
 
-### Best of N
-
-Generate N candidates and select the highest-scoring:
+### With Budget Limit
 
 ```python
-from kkachi import best_of, Checks
+result = refine(llm, "Explain recursion") \
+    .validate(Checks().min_len(200)) \
+    .with_budget(5000)  # Max 5000 tokens
+    .go()
+```
 
-result, pool = best_of(llm, "Write a haiku about Rust", 5) \
-    .metric(lambda output: 1.0 if len(output.strip().splitlines()) == 3 else 0.0) \
-    .validate(Checks().min_len(10)) \
+## Best-of-N Selection
+
+### Basic Best-of-N
+
+```python
+from kkachi import best_of, Checks, ApiLlm
+
+llm = ApiLlm.from_env()
+
+result, pool = best_of(llm, "Write a haiku about Python") \
+    .n(5) \
+    .validate(Checks().min_len(10).max_len(100)) \
     .go_with_pool()
 
-print(f"Best: {result.output} (score: {result.score:.2f})")
-stats = pool.stats()
-print(f"Pool mean: {stats.mean:.2f}, std: {stats.std_dev:.2f}")
+print(f"Best: {result.output}")
+print(f"Score: {result.score:.2f}")
+print(f"Pool stats: {pool.count()} candidates, mean={pool.mean():.2f}")
 ```
 
-### Ensemble Voting
-
-Multiple chains vote on the answer:
+### Custom Metric Function
 
 ```python
-from kkachi import ensemble
+def haiku_metric(output: str) -> float:
+    """Score haikus based on line count."""
+    lines = output.strip().split('\n')
+    if len(lines) == 3:
+        return 0.9
+    return 0.3
 
-result, consensus = ensemble(llm, "What is the capital of Australia?", 7) \
-    .aggregate("majority_vote") \
-    .go_with_consensus()
-
-print(f"Answer: {result.output} (agreement: {consensus.agreement_ratio():.0%})")
-for answer, count in consensus.vote_counts().items():
-    print(f"  '{answer}': {count} votes")
-```
-
-### Chain of Thought
-
-Step-by-step reasoning:
-
-```python
-from kkachi import reason, Checks
-
-result = reason(llm, "A farmer has 17 sheep. All but 9 die. How many are left?") \
-    .validate(Checks().regex(r"\d+")) \
-    .max_iter(3) \
+result = best_of(llm, "Write a haiku about Rust") \
+    .n(7) \
+    .metric(haiku_metric) \
     .go()
-
-print(f"Reasoning: {result.reasoning}")
-print(f"Answer: {result.output}")
 ```
 
-### ReAct Agent
-
-Tool-calling agent with reasoning loop:
+### With Validation
 
 ```python
-from kkachi import agent, ToolDef
-
-search = ToolDef("search", "Search the web for information",
-    lambda query: f"Tokyo population: 14 million")
-
-calc = ToolDef("calculator", "Evaluate a math expression",
-    lambda expr: str(eval(expr)))
-
-result = agent(llm, "What is Tokyo's population divided by 2?") \
-    .tool(search) \
-    .tool(calc) \
-    .max_steps(10) \
+result = best_of(llm, "Write a limerick") \
+    .n(10) \
+    .metric(lambda text: 0.8 if len(text.split('\n')) == 5 else 0.2) \
+    .validate(Checks().min_len(50).forbid("inappropriate")) \
     .go()
-
-print(f"Answer: {result.output}")
-for step in result.trajectory():
-    print(f"  {step.action}({step.action_input}) -> {step.observation}")
 ```
 
-### Program of Thought
+## Memory & RAG
 
-Generate and execute code:
-
-```python
-from kkachi import program, Executor, Checks
-
-result = program(llm, "Calculate the first 10 Fibonacci numbers") \
-    .executor(Executor.python()) \
-    .validate(Checks().regex(r"\d+")) \
-    .max_iter(3) \
-    .go()
-
-print(f"Output: {result.output}")
-print(f"Code: {result.code}")
-print(f"Success: {result.success}")
-```
-
-### Validators
-
-Pattern-based, CLI, and semantic validation with batch variants:
-
-```python
-from kkachi import Checks, Semantic, Validator, CliValidator
-
-# Single checks
-v = Checks() \
-    .require("fn ") \
-    .forbid(".unwrap()") \
-    .regex(r"Result<.*>") \
-    .min_len(50) \
-    .max_len(500)
-
-# Batch checks (multiple patterns at once)
-v = Checks() \
-    .require_all(["fn ", "->", "Result"]) \
-    .forbid_all([".unwrap()", "panic!", "todo!"]) \
-    .regex_all([r"fn \w+", r"-> \w+"])
-
-# CLI validation (external tools)
-v = CliValidator("rustfmt") \
-    .args(["--check"]) \
-    .then("rustc") \
-    .args(["--emit=metadata", "-o", "/dev/null"]) \
-    .required() \
-    .ext("rs")
-
-# LLM-as-judge
-v = Semantic(llm) \
-    .criterion("Code is idiomatic Rust") \
-    .criterion("Error handling is complete") \
-    .threshold(0.8)
-
-# Compose validators
-strict = Checks().require("fn ").and_(Semantic(llm).criterion("Clean code").threshold(0.8))
-combined = Validator.all([
-    Checks().require("fn "),
-    Checks().forbid("panic!"),
-    Semantic(llm).criterion("Well documented").threshold(0.7),
-])
-```
-
-### Memory / RAG
-
-Store and retrieve examples for few-shot learning:
+### Basic Memory Usage
 
 ```python
 from kkachi import Memory
 
+# Create in-memory store
 mem = Memory()
-mem.add("fn read_file(p: &str) -> io::Result<String> { fs::read_to_string(p) }")
-mem.add("fn parse_json(s: &str) -> Result<Value, _> { serde_json::from_str(s) }")
 
-results = mem.search("how to read files", 3)
-for r in results:
-    print(f"Score: {r.score:.2f}, Content: {r.content}")
+# Add documents
+mem.add("Rust uses ownership for memory safety")
+mem.add("Python uses reference counting and garbage collection")
+mem.add("JavaScript is single-threaded with an event loop")
+
+# Search with semantic similarity
+results = mem.search("memory management", k=2)
+for recall in results:
+    print(f"Score: {recall.score:.2f} - {recall.content}")
 ```
 
-### Templates
-
-Structured prompts with format enforcement:
+### Persistent Memory
 
 ```python
-from kkachi import Template, FormatType, PromptTone
+# Persist to disk
+mem = Memory().persist("./knowledge.db")
 
-template = Template("code_gen") \
-    .system_prompt("You are an expert Rust programmer.") \
-    .format(FormatType.JSON) \
-    .tone(PromptTone.RESTRICTIVE) \
-    .strict(True) \
-    .example("Write hello world", '{"code": "fn main() { println!(\"Hello\"); }"}')
+# Add documents (saved to disk)
+mem.add("FastAPI is a modern Python web framework")
+mem.add("Django is a batteries-included web framework")
 
-prompt = template.render("Write a URL parser")
-template.validate_output('{"code": "fn parse() {}"}')
-data = template.parse_json('{"code": "fn parse() {}"}')
+# Search (from disk)
+results = mem.search("web frameworks", k=2)
 ```
 
-## API Reference
-
-### Entry Points
-
-| Function | Description |
-|----------|-------------|
-| `ApiLlm.from_env()` | Auto-detect LLM provider from environment |
-| `ApiLlm.anthropic(key, model)` | Create Anthropic Claude client |
-| `ApiLlm.openai(key, model)` | Create OpenAI client |
-| `ApiLlm.claude_code()` | Use local Claude CLI (no API key) |
-| `Kkachi.refine(prompt).run(fn)` | Iterative refinement (`fn(iter, prompt, feedback) -> str`) |
-| `reason(llm, prompt)` | Chain of Thought reasoning |
-| `best_of(llm, prompt, n)` | Best of N candidate selection |
-| `ensemble(llm, prompt, n)` | Multi-chain ensemble voting |
-| `agent(llm, goal)` | ReAct agent with tools |
-| `program(llm, problem)` | Code generation + execution |
-
-### LLM Optimizations
-
-| Method | Description |
-|--------|-------------|
-| `.with_cache(capacity)` | LRU caching for identical prompts (reduces API costs) |
-| `.with_rate_limit(rps)` | Token bucket rate limiting (prevents 429 errors) |
-| `.with_retry(max_retries)` | Exponential backoff retry (handles transient failures) |
-
-### Validators
-
-| Class | Variants |
-|-------|----------|
-| `Checks()` | `.require()`, `.require_all()`, `.forbid()`, `.forbid_all()`, `.regex()`, `.regex_all()`, `.min_len()`, `.max_len()` |
-| `CliValidator(cmd)` | `.args()`, `.ext()`, `.then()`, `.required()`, `.weight()` |
-| `Semantic(llm)` | `.criterion()`, `.threshold()` |
-| `v1.and_(v2)` | Both must pass |
-| `v1.or_(v2)` | At least one passes |
-| `Validator.all([...])` | All must pass |
-| `Validator.any([...])` | At least one passes |
-
-### Result Types
-
-| Type | Key Fields |
-|------|------------|
-| `RefineResult` | `output`, `score`, `iterations` |
-| `ReasonResult` | `output`, `reasoning`, `score`, `iterations` |
-| `BestOfResult` | `output`, `score`, `candidates_generated` |
-| `EnsembleResult` | `output`, `chains_generated` |
-| `AgentResult` | `output`, `steps`, `success`, `trajectory()` |
-| `ProgramResult` | `output`, `code`, `attempts`, `success` |
-
-### LLM Options
-
-**Option 1: Built-in ApiLlm (Recommended)**
+### Tagged Documents
 
 ```python
-from kkachi import ApiLlm
+mem = Memory()
 
-# Auto-detect from environment
+# Add with tags
+mem.add("Rust is memory safe", tag="languages")
+mem.add("Python is dynamically typed", tag="languages")
+mem.add("FastAPI uses Pydantic", tag="frameworks")
+
+# Search within tag
+results = mem.search("typed", k=2, tag="languages")
+```
+
+### Diversity Search
+
+```python
+# Get diverse results (avoid near-duplicates)
+results = mem.search_diverse("programming", k=5, min_similarity=0.7)
+```
+
+### List All Documents
+
+```python
+all_docs = mem.list()
+for doc in all_docs:
+    print(f"{doc.id}: {doc.content[:50]}...")
+```
+
+### Update and Delete
+
+```python
+# Update by ID
+mem.update(doc_id, new_content="Updated content")
+
+# Delete by ID
+mem.delete(doc_id)
+
+# Clear all
+mem.clear()
+```
+
+## CLI Validators
+
+### Basic CLI Validation
+
+```python
+from kkachi import refine, CliValidator, ApiLlm
+
 llm = ApiLlm.from_env()
 
-# With optimizations
-llm = (ApiLlm.from_env()
-       .with_cache(100)
-       .with_rate_limit(10.0)
-       .with_retry(3))
+# Validate with rustfmt
+validator = CliValidator("rustfmt").args(["--check"]).stdin()
 
-# Explicit provider
-llm = ApiLlm.anthropic("sk-ant-...", "claude-sonnet-4-20250514")
-llm = ApiLlm.openai("sk-...", "gpt-4o")
-llm = ApiLlm.claude_code()  # Local CLI
+result = refine(llm, "Write a Rust function") \
+    .validate(validator) \
+    .go()
 ```
 
-**Option 2: Custom Callable**
-
-DSPy-style builders also accept `(prompt: str, feedback: str = None) -> str`:
+### Combining Validators
 
 ```python
-# Anthropic
-import anthropic
-client = anthropic.Anthropic()
-def llm(prompt, feedback=None):
-    messages = [{"role": "user", "content": prompt}]
-    if feedback:
-        messages.append({"role": "user", "content": f"Previous attempt feedback: {feedback}"})
-    return client.messages.create(
-        model="your-model-id", max_tokens=4096, messages=messages
-    ).content[0].text
+from kkachi import CliValidator, Checks
 
-# OpenAI
-from openai import OpenAI
-client = OpenAI()
-def llm(prompt, feedback=None):
-    messages = [{"role": "user", "content": prompt}]
-    if feedback:
-        messages.append({"role": "user", "content": feedback})
-    return client.chat.completions.create(
-        model="gpt-4o", messages=messages
-    ).choices[0].message.content
+# CLI validation + pattern checks
+validator = CliValidator("rustfmt") \
+    .args(["--check"]) \
+    .stdin() \
+    .and_(Checks().forbid(".unwrap()").require("Result"))
+
+result = refine(llm, "Write safe Rust code") \
+    .validate(validator) \
+    .go()
 ```
 
-## License
+### Multiple CLI Tools
 
-PolyForm Noncommercial 1.0.0
+```python
+# Format check AND lint check
+validator = CliValidator("rustfmt") \
+    .args(["--check"]) \
+    .stdin() \
+    .and_(CliValidator("cargo").args(["clippy", "--"]).stdin())
+```
+
+### With Working Directory
+
+```python
+validator = CliValidator("npm") \
+    .args(["test"]) \
+    .cwd("./my-project")
+```
+
+## Jinja2 Templates
+
+### Basic Template
+
+```python
+from kkachi import JinjaTemplate, JinjaFormatter
+
+template = JinjaTemplate.from_str("task", """
+Task: {{ task }}
+
+Requirements:
+{% for req in requirements %}
+- {{ req }}
+{% endfor %}
+
+Output format: {{ format }}
+""")
+
+formatter = JinjaFormatter() \
+    .template(template) \
+    .context({
+        "task": "Parse URLs",
+        "requirements": ["Handle edge cases", "Return Result type"],
+        "format": "Rust code"
+    })
+
+# Use with refinement
+result = refine(llm, formatter).go()
+```
+
+### Template from File
+
+```python
+template = JinjaTemplate.from_file("task", "./templates/code_gen.j2")
+
+formatter = JinjaFormatter() \
+    .template(template) \
+    .context({"task": "URL parser", "language": "Rust"})
+```
+
+### Dynamic Context with Memory
+
+```python
+from kkachi import Memory, JinjaTemplate, JinjaFormatter
+
+# Build knowledge base
+mem = Memory()
+mem.add("Use Result for errors")
+mem.add("Avoid .unwrap() in production")
+
+# Search for relevant patterns
+patterns = mem.search("best practices", k=3)
+pattern_list = [p.content for p in patterns]
+
+# Create template with patterns
+template = JinjaTemplate.from_str("task", """
+Task: {{ task }}
+
+Best Practices:
+{% for pattern in patterns %}
+- {{ pattern }}
+{% endfor %}
+""")
+
+formatter = JinjaFormatter() \
+    .template(template) \
+    .context({"task": "Write safe code", "patterns": pattern_list})
+```
+
+## Ensemble & Voting
+
+### Basic Ensemble
+
+```python
+from kkachi import ensemble, Checks, ApiLlm
+
+llm = ApiLlm.from_env()
+
+result = ensemble(llm, "Explain Rust ownership") \
+    .strategies([
+        "Explain with analogies",
+        "Explain with code examples",
+        "Explain step-by-step"
+    ]) \
+    .vote_threshold(2) \
+    .validate(Checks().min_len(100)) \
+    .go()
+```
+
+### Weighted Strategies
+
+```python
+result = ensemble(llm, "Design a REST API") \
+    .strategies([
+        ("Focus on security", 2.0),
+        ("Focus on performance", 1.0),
+        ("Focus on simplicity", 1.5)
+    ]) \
+    .go()
+```
+
+## Complete Workflow
+
+### Memory + Templates + CLI Validation
+
+```python
+from kkachi import (
+    Memory,
+    JinjaTemplate,
+    JinjaFormatter,
+    CliValidator,
+    Checks,
+    refine,
+    ApiLlm
+)
+
+# 1. Setup knowledge base
+mem = Memory().persist("./code_patterns.db")
+mem.add("Use Result<T, E> for error handling")
+mem.add("Avoid .unwrap() in production code")
+mem.add("Prefer &str over String in signatures")
+
+# 2. Search for relevant patterns
+patterns = mem.search("rust best practices", k=3)
+pattern_texts = [p.content for p in patterns]
+
+# 3. Create dynamic template
+template = JinjaTemplate.from_str("code_gen", """
+Task: {{ task }}
+
+Best Practices:
+{% for pattern in patterns %}
+- {{ pattern }}
+{% endfor %}
+
+Requirements:
+- Must compile with rustfmt
+- Must pass clippy
+- No .unwrap() calls
+""")
+
+formatter = JinjaFormatter() \
+    .template(template) \
+    .context({"task": "Parse URLs", "patterns": pattern_texts})
+
+# 4. Create validator (CLI + pattern checks)
+validator = CliValidator("rustfmt") \
+    .args(["--check"]) \
+    .stdin() \
+    .and_(Checks().forbid(".unwrap()").require("Result"))
+
+# 5. Generate with refinement
+llm = ApiLlm.from_env()
+
+result = refine(llm, formatter) \
+    .validate(validator) \
+    .max_iter(10) \
+    .target(0.95) \
+    .go()
+
+print(f"Success! Score: {result.score:.2%}")
+print(f"Iterations: {result.iterations}")
+print(f"Output:\n{result.output}")
+```
+
+### Multi-Stage Pipeline
+
+```python
+from kkachi import best_of, refine, Checks, ApiLlm
+
+llm = ApiLlm.from_env()
+
+# Stage 1: Generate multiple candidates
+print("Stage 1: Generating candidates...")
+result, pool = best_of(llm, "Write a URL parser in Python") \
+    .n(5) \
+    .metric(lambda text: 0.8 if "def parse_url" in text else 0.3) \
+    .go_with_pool()
+
+print(f"Best candidate (score={result.score:.2f})")
+
+# Stage 2: Refine the best candidate
+print("\nStage 2: Refining best candidate...")
+refined = refine(llm, f"Improve this code:\n{result.output}") \
+    .validate(
+        Checks()
+            .require("def parse_url")
+            .require("return")
+            .forbid("eval")
+            .min_len(100)
+    ) \
+    .max_iter(5) \
+    .target(0.9) \
+    .go()
+
+print(f"Final score: {refined.score:.2%}")
+print(f"Final output:\n{refined.output}")
+```
+
+## Error Handling
+
+### Handling API Errors
+
+```python
+from kkachi import ApiLlm, refine, Checks
+
+try:
+    llm = ApiLlm.from_env()
+    result = refine(llm, "Write a function").go()
+except RuntimeError as e:
+    print(f"API Error: {e}")
+except Exception as e:
+    print(f"Unexpected error: {e}")
+```
+
+### Validation Failures
+
+```python
+result = refine(llm, "Write code") \
+    .validate(Checks().require("impossible_string")) \
+    .max_iter(3) \
+    .go()
+
+if result.score < 0.5:
+    print("Warning: Low score, validation may have failed")
+    print(f"Best attempt:\n{result.output}")
+```
+
+## Advanced Features
+
+### Custom Scoring
+
+```python
+def custom_scorer(output: str) -> float:
+    """Complex scoring logic."""
+    score = 0.0
+
+    # Check structure
+    if "def " in output:
+        score += 0.3
+
+    # Check length
+    if 50 <= len(output) <= 500:
+        score += 0.3
+
+    # Check complexity
+    if output.count("if ") >= 2:
+        score += 0.2
+
+    # Check documentation
+    if '"""' in output:
+        score += 0.2
+
+    return min(score, 1.0)
+
+result = best_of(llm, "Write a validator") \
+    .n(5) \
+    .metric(custom_scorer) \
+    .go()
+```
+
+### Streaming Results
+
+```python
+# For long-running operations
+result = refine(llm, "Write complex code") \
+    .max_iter(20) \
+    .validate(Checks().min_len(500)) \
+    .go()
+
+# Check progress
+print(f"Completed in {result.iterations} iterations")
+```
+
+## Tips & Best Practices
+
+### 1. Start Simple
+
+Begin with basic validators and add complexity as needed:
+
+```python
+# Start simple
+result = refine(llm, prompt).validate(Checks().min_len(50)).go()
+
+# Add more validation as you learn what works
+result = refine(llm, prompt) \
+    .validate(
+        Checks()
+            .min_len(50)
+            .require("def ")
+            .forbid("eval")
+    ) \
+    .go()
+```
+
+### 2. Use Appropriate Iteration Limits
+
+```python
+# Simple tasks: 3-5 iterations
+result = refine(llm, "Write a hello world").max_iter(3).go()
+
+# Complex tasks: 10-15 iterations
+result = refine(llm, "Write a web server").max_iter(15).go()
+```
+
+### 3. Combine Memory with Templates
+
+```python
+# Build reusable knowledge base
+mem = Memory().persist("./patterns.db")
+
+# Use in templates for consistent generation
+patterns = mem.search("best practices", k=5)
+# ... use in JinjaTemplate
+```
+
+### 4. Layer Validators
+
+```python
+# Layer validators from fast to slow
+validator = Checks() \
+    .min_len(50) \  # Fast: check length first
+    .require("def ") \  # Fast: check patterns
+    .and_(CliValidator("rustfmt").stdin())  # Slow: external validation last
+```
+
+## Next Steps
+
+- **Rust Examples**: See [examples/](examples/) for Rust examples
+- **API Reference**: Check [crates/kkachi-python/README.md](crates/kkachi-python/README.md)
+- **Source Code**: Explore [crates/kkachi-python/](crates/kkachi-python/)
+
+## Getting Help
+
+- **Issues**: https://github.com/lituus-io/kkachi/issues
+- **Discussions**: https://github.com/lituus-io/kkachi/discussions
