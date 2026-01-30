@@ -18,18 +18,3 @@ harness = false
 name = "cache_benchmark"
 path = "cache_benchmark.rs"
 harness = false
-
-[[bench]]
-name = "validator_benchmark"
-path = "validator_benchmark.rs"
-harness = false
-
-[[bench]]
-name = "memory_benchmark"
-path = "memory_benchmark.rs"
-harness = false
-
-[[bench]]
-name = "pipeline_benchmark"
-path = "pipeline_benchmark.rs"
-harness = false
