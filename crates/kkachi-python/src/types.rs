@@ -99,10 +99,10 @@ impl PyRecall {
 impl From<Recall> for PyRecall {
     fn from(r: Recall) -> Self {
         Self {
-            id: r.id,
-            content: r.content,
+            id: r.id.to_string(),
+            content: r.content.to_string(),
             score: r.score,
-            tag: r.tag,
+            tag: r.tag.map(|t| t.to_string()),
         }
     }
 }
