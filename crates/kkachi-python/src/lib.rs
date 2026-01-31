@@ -7,7 +7,10 @@
 //! ## Example
 //!
 //! ```python
-//! from kkachi import Kkachi, CliValidator, Checks, Memory
+//! from kkachi import refine, ApiLlm, CliValidator, Checks, Memory
+//!
+//! # Initialize LLM
+//! llm = ApiLlm.from_env()
 //!
 //! # Pattern-based validation
 //! validator = Checks().require("fn ").forbid(".unwrap()").min_len(50)
@@ -16,11 +19,11 @@
 //! cli_validator = CliValidator("rustfmt").args(["--check"]).then("rustc").ext("rs")
 //!
 //! # Run refinement
-//! result = Kkachi.refine("Write a URL parser") \
+//! result = refine(llm, "Write a URL parser") \
 //!     .validate(cli_validator) \
 //!     .max_iter(5) \
 //!     .target(0.9) \
-//!     .run(generate_fn)
+//!     .go()
 //!
 //! # Memory/RAG
 //! mem = Memory()
@@ -30,7 +33,6 @@
 
 use pyo3::prelude::*;
 
-mod builder;
 mod checks;
 mod compose;
 mod dspy;
@@ -42,7 +44,6 @@ mod template;
 mod types;
 mod validator;
 
-use builder::*;
 use checks::*;
 use compose::*;
 use dspy::*;
@@ -57,14 +58,8 @@ use validator::*;
 /// Python module for Kkachi.
 #[pymodule]
 fn _kkachi(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Main entry point
-    m.add_class::<PyKkachi>()?;
-
     // LLM implementations
     m.add_class::<PyApiLlm>()?;
-
-    // Builder
-    m.add_class::<PyRefineBuilder>()?;
 
     // Result types
     m.add_class::<PyRefineResult>()?;
@@ -95,7 +90,7 @@ fn _kkachi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_extract_all_code, m)?)?;
 
     // DSPy-style modules - Builders
-    m.add_class::<PyRefineBuilderV2>()?;
+    m.add_class::<PyRefineBuilder>()?;
     m.add_class::<PyReasonBuilder>()?;
     m.add_class::<PyBestOfBuilder>()?;
     m.add_class::<PyEnsembleBuilder>()?;

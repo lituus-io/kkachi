@@ -1,10 +1,10 @@
 # Performance Baseline Metrics
 
-**Date**: 2026-01-30
-**Version**: 0.3.0 (after Arc optimizations)
+**Date**: 2026-01-31
+**Version**: 0.5.0 (API modernization + optimizations)
 **Platform**: darwin (macOS)
 
-This document establishes performance baselines for the kkachi library after implementing Arc-based optimizations in Phase 3 of the refactoring plan.
+This document establishes performance baselines for the kkachi library with all optimizations from v0.5.0, including Arc-based zero-copy operations and API improvements.
 
 ## Overview
 
@@ -204,6 +204,7 @@ cargo bench -- --baseline previous
 
 ## References
 
-- **Refactoring Summary**: See `REFACTORING_SUMMARY.md` for optimization details
-- **Optimization Guide**: See `OPTIMIZATION_GUIDE.md` for Arc usage patterns
+- **Main README**: See [README.md](README.md) for overview
+- **Optimizer Guide**: See [OPTIMIZER_GUIDE.md](OPTIMIZER_GUIDE.md) for optimization strategies
+- **Python Examples**: See [PYTHON_EXAMPLES.md](PYTHON_EXAMPLES.md) for usage patterns
 - **Criterion Docs**: https://bheisler.github.io/criterion.rs/

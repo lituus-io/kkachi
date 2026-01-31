@@ -36,7 +36,7 @@ High-performance LLM prompt optimization library with DSPy-style patterns for Ru
 
 - 🚀 **Simple API** - Fluent builder pattern
 - 📚 **Comprehensive Examples** - Rust and Python
-- 🧪 **Well Tested** - 699 tests with 100% pass rate
+- 🧪 **Well Tested** - 648 tests with 98% pass rate
 - 🔧 **Production Ready** - Zero-copy, benchmarked performance
 
 ## Installation
@@ -51,7 +51,7 @@ pip install kkachi
 
 ```toml
 [dependencies]
-kkachi = "0.4"
+kkachi = "0.5"
 ```
 
 ## Quick Start
@@ -243,13 +243,34 @@ let limited = llm.rate_limit()
 let result = limited.generate("Hello", "", None).await?;
 ```
 
-## What's New in v0.4.0
+## What's New in v0.5.0
 
-- ⚡ **Zero-copy optimizations** - 10-50x faster cache hits and retrievals
-- 📊 **Performance baselines** - Comprehensive benchmarking suite
-- 🧪 **Extended test coverage** - 699 tests with 100% pass rate
-- 📚 **Enhanced documentation** - Complete optimizer guide and examples
-- ✅ **Production ready** - Zero compiler warnings, full CI coverage
+**⚠️ Breaking Changes** - See migration guide below
+
+- 🎯 **API Modernization** - Single unified API, removed legacy backward compatibility
+- 🧹 **Code Quality** - 57% enum size reduction, conventional naming, -343 lines of technical debt
+- ✅ **Production Ready** - 648 tests (98% pass rate), zero critical warnings
+- 📚 **Enhanced Documentation** - Updated examples, optimizer guide, and performance baselines
+- 🔧 **Better Performance** - Optimized enum variants, cleaner architecture
+
+### Migration from v0.4.x
+
+**Old API (v0.4.x) - NO LONGER WORKS:**
+```python
+from kkachi import Kkachi
+result = Kkachi.refine("prompt").run(callable)
+```
+
+**New API (v0.5.0+) - REQUIRED:**
+```python
+from kkachi import refine, ApiLlm
+llm = ApiLlm.from_env()
+result = refine(llm, "prompt").go()
+```
+
+**Enum Renaming:**
+- `FormatType.JSON` → `FormatType.Json`
+- `PromptTone.INCLUSIVE` → `PromptTone.Inclusive`
 
 ## Repository Structure
 
@@ -300,8 +321,9 @@ See benchmarks: `cargo bench`
 
 - **Rust API Docs**: [docs.rs/kkachi](https://docs.rs/kkachi)
 - **Python Examples**: [PYTHON_EXAMPLES.md](PYTHON_EXAMPLES.md)
+- **Optimizer Guide**: [OPTIMIZER_GUIDE.md](OPTIMIZER_GUIDE.md)
+- **Performance Baseline**: [PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md)
 - **Rust Examples**: [examples/](examples/)
-- **Python Package**: [crates/kkachi-python/README.md](crates/kkachi-python/README.md)
 
 ## Contributing
 

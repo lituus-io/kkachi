@@ -21,25 +21,25 @@ use kkachi::recursive::{FormatType, PromptTone, Template, TemplateExample};
 #[derive(Clone, Copy, PartialEq)]
 pub enum PyFormatType {
     /// JSON format with optional schema validation.
-    JSON = 0,
+    Json = 0,
     /// YAML format with optional schema validation.
-    YAML = 1,
+    Yaml = 1,
     /// Markdown format.
-    MARKDOWN = 2,
+    Markdown = 2,
     /// XML format.
-    XML = 3,
+    Xml = 3,
     /// Plain text (no format enforcement).
-    PLAIN = 4,
+    Plain = 4,
 }
 
 impl From<PyFormatType> for FormatType {
     fn from(py_fmt: PyFormatType) -> Self {
         match py_fmt {
-            PyFormatType::JSON => FormatType::Json,
-            PyFormatType::YAML => FormatType::Yaml,
-            PyFormatType::MARKDOWN => FormatType::Markdown,
-            PyFormatType::XML => FormatType::Xml,
-            PyFormatType::PLAIN => FormatType::Plain,
+            PyFormatType::Json => FormatType::Json,
+            PyFormatType::Yaml => FormatType::Yaml,
+            PyFormatType::Markdown => FormatType::Markdown,
+            PyFormatType::Xml => FormatType::Xml,
+            PyFormatType::Plain => FormatType::Plain,
         }
     }
 }
@@ -47,11 +47,11 @@ impl From<PyFormatType> for FormatType {
 impl From<FormatType> for PyFormatType {
     fn from(fmt: FormatType) -> Self {
         match fmt {
-            FormatType::Json => PyFormatType::JSON,
-            FormatType::Yaml => PyFormatType::YAML,
-            FormatType::Markdown => PyFormatType::MARKDOWN,
-            FormatType::Xml => PyFormatType::XML,
-            FormatType::Plain => PyFormatType::PLAIN,
+            FormatType::Json => PyFormatType::Json,
+            FormatType::Yaml => PyFormatType::Yaml,
+            FormatType::Markdown => PyFormatType::Markdown,
+            FormatType::Xml => PyFormatType::Xml,
+            FormatType::Plain => PyFormatType::Plain,
         }
     }
 }
@@ -72,11 +72,11 @@ impl From<FormatType> for PyFormatType {
 #[derive(Clone, Copy, PartialEq)]
 pub enum PyPromptTone {
     /// Inclusive — encourages exploration, tolerates variation.
-    INCLUSIVE = 0,
+    Inclusive = 0,
     /// Balanced — neutral instructions (default).
-    BALANCED = 1,
+    Balanced = 1,
     /// Restrictive — strict requirements, precise outputs.
-    RESTRICTIVE = 2,
+    Restrictive = 2,
 }
 
 #[pymethods]
@@ -100,9 +100,9 @@ impl PyPromptTone {
 impl PyPromptTone {
     fn to_rust(self) -> PromptTone {
         match self {
-            Self::INCLUSIVE => PromptTone::Inclusive,
-            Self::BALANCED => PromptTone::Balanced,
-            Self::RESTRICTIVE => PromptTone::Restrictive,
+            Self::Inclusive => PromptTone::Inclusive,
+            Self::Balanced => PromptTone::Balanced,
+            Self::Restrictive => PromptTone::Restrictive,
         }
     }
 }
@@ -116,9 +116,9 @@ impl From<PyPromptTone> for PromptTone {
 impl From<PromptTone> for PyPromptTone {
     fn from(tone: PromptTone) -> Self {
         match tone {
-            PromptTone::Inclusive => PyPromptTone::INCLUSIVE,
-            PromptTone::Balanced => PyPromptTone::BALANCED,
-            PromptTone::Restrictive => PyPromptTone::RESTRICTIVE,
+            PromptTone::Inclusive => PyPromptTone::Inclusive,
+            PromptTone::Balanced => PyPromptTone::Balanced,
+            PromptTone::Restrictive => PyPromptTone::Restrictive,
         }
     }
 }

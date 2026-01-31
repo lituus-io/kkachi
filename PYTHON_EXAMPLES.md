@@ -650,8 +650,10 @@ validator = Checks() \
 
 ## Next Steps
 
+- **Main README**: See [README.md](README.md) for overview
+- **Optimizer Guide**: Check [OPTIMIZER_GUIDE.md](OPTIMIZER_GUIDE.md)
+- **Performance Baseline**: Review [PERFORMANCE_BASELINE.md](PERFORMANCE_BASELINE.md)
 - **Rust Examples**: See [examples/](examples/) for Rust examples
-- **API Reference**: Check [crates/kkachi-python/README.md](crates/kkachi-python/README.md)
 - **Source Code**: Explore [crates/kkachi-python/](crates/kkachi-python/)
 
 ## Getting Help

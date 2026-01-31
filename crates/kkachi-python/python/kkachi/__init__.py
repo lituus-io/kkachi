@@ -9,20 +9,19 @@ This package provides Python bindings for the Kkachi Rust library,
 enabling high-performance recursive language prompting and optimization.
 
 Example:
-    >>> from kkachi import Kkachi
+    >>> from kkachi import refine, ApiLlm
     >>>
-    >>> result = Kkachi.refine("Write a URL parser in Rust") \\
+    >>> llm = ApiLlm.from_env()
+    >>> result = refine(llm, "Write a URL parser in Rust") \\
     ...     .require("fn ") \\
     ...     .forbid(".unwrap()") \\
     ...     .max_iter(5) \\
-    ...     .run(lambda i, prompt, feedback: llm(prompt, feedback))
+    ...     .go()
     >>>
     >>> print(f"Score: {result.score}")
 """
 
 from kkachi._kkachi import (
-    # Main entry point
-    Kkachi,
     # LLM implementations
     ApiLlm,
     # Builder
@@ -54,7 +53,6 @@ from kkachi._kkachi import (
     agent,
     program,
     # DSPy-style builders
-    RefineBuilderV2,
     ReasonBuilder,
     BestOfBuilder,
     EnsembleBuilder,
@@ -82,8 +80,6 @@ from kkachi._kkachi import (
 )
 
 __all__ = [
-    # Main entry point
-    "Kkachi",
     # LLM implementations
     "ApiLlm",
     # Builder
@@ -115,7 +111,6 @@ __all__ = [
     "agent",
     "program",
     # DSPy-style builders
-    "RefineBuilderV2",
     "ReasonBuilder",
     "BestOfBuilder",
     "EnsembleBuilder",

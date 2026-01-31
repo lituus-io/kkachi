@@ -6,7 +6,6 @@ authors.workspace = true
 license-file = "LICENSE"
 repository.workspace = true
 description = "Python bindings for the Kkachi LLM optimization library"
-readme = "README.md"
 keywords = ["python", "llm", "optimization", "dspy", "prompting"]
 categories = ["development-tools", "science"]
 

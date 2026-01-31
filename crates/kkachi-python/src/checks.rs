@@ -94,7 +94,7 @@ impl PyChecks {
     /// Compose with AND semantics (both must pass).
     #[pyo3(name = "and_")]
     fn and_compose(&self, other: &Bound<'_, PyAny>) -> PyResult<PyValidator> {
-        let self_node = ValidatorNode::Checks(self.inner.clone());
+        let self_node = ValidatorNode::Checks(Box::new(self.inner.clone()));
         let other_node = extract_validator_node(other)?;
         Ok(PyValidator {
             node: ValidatorNode::And(Box::new(self_node), Box::new(other_node)),
@@ -104,7 +104,7 @@ impl PyChecks {
     /// Compose with OR semantics (at least one must pass).
     #[pyo3(name = "or_")]
     fn or_compose(&self, other: &Bound<'_, PyAny>) -> PyResult<PyValidator> {
-        let self_node = ValidatorNode::Checks(self.inner.clone());
+        let self_node = ValidatorNode::Checks(Box::new(self.inner.clone()));
         let other_node = extract_validator_node(other)?;
         Ok(PyValidator {
             node: ValidatorNode::Or(Box::new(self_node), Box::new(other_node)),
