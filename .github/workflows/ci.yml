@@ -96,7 +96,7 @@ jobs:
           python -c "
           import kkachi
           print(f'kkachi {kkachi.__version__}')
-          from kkachi import Checks, Kkachi
+          from kkachi import Checks, refine, ApiLlm, Memory
           c = Checks().require('fn ').forbid('todo!')
           print('All imports OK')
           "
