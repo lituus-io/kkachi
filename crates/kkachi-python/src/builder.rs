@@ -42,6 +42,8 @@ pub struct PyRefineBuilder {
     max_length: Option<usize>,
     require_patterns: Vec<String>,
     forbid_patterns: Vec<String>,
+    adaptive: bool,
+    token_budget: Option<u32>,
 }
 
 #[pymethods]
@@ -57,6 +59,8 @@ impl PyRefineBuilder {
             max_length: None,
             require_patterns: Vec::new(),
             forbid_patterns: Vec::new(),
+            adaptive: false,
+            token_budget: None,
         }
     }
 
@@ -106,6 +110,20 @@ impl PyRefineBuilder {
     fn max_len(&self, n: usize) -> Self {
         let mut new = self.clone();
         new.max_length = Some(n);
+        new
+    }
+
+    /// Enable adaptive iteration mode.
+    fn adaptive(&self) -> Self {
+        let mut new = self.clone();
+        new.adaptive = true;
+        new
+    }
+
+    /// Set token budget limit.
+    fn with_budget(&self, max_tokens: u32) -> Self {
+        let mut new = self.clone();
+        new.token_budget = Some(max_tokens);
         new
     }
 
@@ -170,28 +188,52 @@ impl PyRefineBuilder {
         // Run refinement
         let result = if let Some(ref cli) = self.cli_validator {
             // Use CLI validator
-            refine(&llm, &self.prompt)
+            let mut builder = refine(&llm, &self.prompt)
                 .validate(cli.clone())
                 .max_iter(self.max_iterations)
-                .target(self.score_threshold)
-                .go()
+                .target(self.score_threshold);
+
+            if self.adaptive {
+                builder = builder.adaptive();
+            }
+            if let Some(budget) = self.token_budget {
+                builder = builder.with_budget(budget);
+            }
+
+            builder.go()
         } else if !self.require_patterns.is_empty()
             || !self.forbid_patterns.is_empty()
             || self.min_length.is_some()
             || self.max_length.is_some()
         {
             // Use checks validator
-            refine(&llm, &self.prompt)
+            let mut builder = refine(&llm, &self.prompt)
                 .validate(check_builder)
                 .max_iter(self.max_iterations)
-                .target(self.score_threshold)
-                .go()
+                .target(self.score_threshold);
+
+            if self.adaptive {
+                builder = builder.adaptive();
+            }
+            if let Some(budget) = self.token_budget {
+                builder = builder.with_budget(budget);
+            }
+
+            builder.go()
         } else {
             // No validation
-            refine(&llm, &self.prompt)
+            let mut builder = refine(&llm, &self.prompt)
                 .max_iter(self.max_iterations)
-                .target(self.score_threshold)
-                .go()
+                .target(self.score_threshold);
+
+            if self.adaptive {
+                builder = builder.adaptive();
+            }
+            if let Some(budget) = self.token_budget {
+                builder = builder.with_budget(budget);
+            }
+
+            builder.go()
         };
 
         match result {

@@ -52,6 +52,7 @@ use kkachi::recursive::{
 };
 
 use crate::compose::{extract_validator_node, DynValidator, ValidatorNode};
+use crate::types::PyRefineResult;
 
 // ============================================================================
 // Python-callable LLM wrapper
@@ -950,6 +951,196 @@ impl PyExecutor {
             ExecutorKind::Bash => "bash",
             ExecutorKind::Ruby => "ruby",
         }
+    }
+}
+
+// ============================================================================
+// Refine Builder (works with ApiLlm or callables)
+// ============================================================================
+
+/// Builder for iterative refinement (works with ApiLlm or callables).
+///
+/// Example:
+/// ```python
+/// from kkachi import refine, Checks, ApiLlm
+///
+/// llm = ApiLlm.from_env()
+/// result = refine(llm, "Write a function") \\
+///     .validate(Checks().require("def ")) \\
+///     .max_iter(5) \\
+///     .go()
+/// ```
+#[pyclass(name = "RefineBuilderV2")]
+pub struct PyRefineBuilderV2 {
+    llm: PyObject,
+    prompt: String,
+    max_iter: u32,
+    target: f64,
+    require_patterns: Vec<String>,
+    forbid_patterns: Vec<String>,
+    validator: Option<ValidatorNode>,
+}
+
+impl Clone for PyRefineBuilderV2 {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| Self {
+            llm: self.llm.clone_ref(py),
+            prompt: self.prompt.clone(),
+            max_iter: self.max_iter,
+            target: self.target,
+            require_patterns: self.require_patterns.clone(),
+            forbid_patterns: self.forbid_patterns.clone(),
+            validator: self.validator.clone(),
+        })
+    }
+}
+
+#[pymethods]
+impl PyRefineBuilderV2 {
+    #[new]
+    fn new(llm: PyObject, prompt: String) -> Self {
+        Self {
+            llm,
+            prompt,
+            max_iter: 5,
+            target: 1.0,
+            require_patterns: Vec::new(),
+            forbid_patterns: Vec::new(),
+            validator: None,
+        }
+    }
+
+    /// Set a composed validator.
+    fn validate(&self, validator: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut new = self.clone();
+        new.validator = Some(extract_validator_node(validator)?);
+        Ok(new)
+    }
+
+    /// Set maximum iterations.
+    fn max_iter(&self, n: u32) -> Self {
+        let mut new = self.clone();
+        new.max_iter = n;
+        new
+    }
+
+    /// Set target score threshold.
+    fn target(&self, score: f64) -> Self {
+        let mut new = self.clone();
+        new.target = score;
+        new
+    }
+
+    /// Add a required pattern for validation.
+    fn require(&self, pattern: String) -> Self {
+        let mut new = self.clone();
+        new.require_patterns.push(pattern);
+        new
+    }
+
+    /// Add a forbidden pattern for validation.
+    fn forbid(&self, pattern: String) -> Self {
+        let mut new = self.clone();
+        new.forbid_patterns.push(pattern);
+        new
+    }
+
+    /// Execute refinement with smart LLM detection.
+    fn go(&self) -> PyResult<PyRefineResult> {
+        Python::with_gil(|py| {
+            // Try to extract PyApiLlm first (fast path)
+            if let Ok(api_llm) = self.llm.extract::<PyRef<crate::llm::PyApiLlm>>(py) {
+                return self.run_with_api_llm(api_llm.inner_ref());
+            }
+
+            // Fallback to PyCallableLlm (Python callable path)
+            let callable_llm = PyCallableLlm::new_from_ref(py, &self.llm);
+            self.run_with_callable(&callable_llm)
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "RefineBuilderV2(prompt='{}', max_iter={})",
+            truncate_str(&self.prompt, 30),
+            self.max_iter
+        )
+    }
+}
+
+impl PyRefineBuilderV2 {
+    /// Fast path: use LlmVariant directly (pure Rust async)
+    fn run_with_api_llm(&self, llm: &crate::llm::LlmVariant) -> PyResult<PyRefineResult> {
+        use kkachi::recursive::refine;
+        use pyo3::exceptions::PyRuntimeError;
+
+        let result = if let Some(ref node) = self.validator {
+            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            refine(llm, &self.prompt)
+                .validate(dyn_v)
+                .max_iter(self.max_iter)
+                .target(self.target)
+                .go()
+        } else if !self.require_patterns.is_empty() || !self.forbid_patterns.is_empty() {
+            let mut cb = checks();
+            for pattern in &self.require_patterns {
+                cb = cb.require(pattern);
+            }
+            for pattern in &self.forbid_patterns {
+                cb = cb.forbid(pattern);
+            }
+            refine(llm, &self.prompt)
+                .validate(cb)
+                .max_iter(self.max_iter)
+                .target(self.target)
+                .go()
+        } else {
+            refine(llm, &self.prompt)
+                .max_iter(self.max_iter)
+                .target(self.target)
+                .go()
+        };
+
+        result
+            .map(|r| r.into())
+            .map_err(|e| PyRuntimeError::new_err(format!("Refinement error: {}", e)))
+    }
+
+    /// Fallback: use PyCallableLlm (Python callable)
+    fn run_with_callable(&self, llm: &PyCallableLlm) -> PyResult<PyRefineResult> {
+        use kkachi::recursive::refine;
+        use pyo3::exceptions::PyRuntimeError;
+
+        let result = if let Some(ref node) = self.validator {
+            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            refine(llm, &self.prompt)
+                .validate(dyn_v)
+                .max_iter(self.max_iter)
+                .target(self.target)
+                .go()
+        } else if !self.require_patterns.is_empty() || !self.forbid_patterns.is_empty() {
+            let mut cb = checks();
+            for pattern in &self.require_patterns {
+                cb = cb.require(pattern);
+            }
+            for pattern in &self.forbid_patterns {
+                cb = cb.forbid(pattern);
+            }
+            refine(llm, &self.prompt)
+                .validate(cb)
+                .max_iter(self.max_iter)
+                .target(self.target)
+                .go()
+        } else {
+            refine(llm, &self.prompt)
+                .max_iter(self.max_iter)
+                .target(self.target)
+                .go()
+        };
+
+        result
+            .map(|r| r.into())
+            .map_err(|e| PyRuntimeError::new_err(format!("Refinement error: {}", e)))
     }
 }
 
@@ -1866,6 +2057,31 @@ impl PyProgramBuilder {
 // ============================================================================
 // Module-level functions (convenience entry points)
 // ============================================================================
+
+/// Iterative refinement with validation.
+///
+/// Args:
+///     llm: An ApiLlm or callable `(prompt: str, feedback: Optional[str]) -> str`
+///     prompt: The prompt/task to refine.
+///
+/// Returns:
+///     RefineBuilderV2: A builder to configure and execute refinement.
+///
+/// Example:
+///     ```python
+///     from kkachi import refine, Checks, ApiLlm
+///
+///     llm = ApiLlm.from_env()
+///     result = refine(llm, "Write a function") \\
+///         .validate(Checks().require("def ")) \\
+///         .max_iter(5) \\
+///         .go()
+///     ```
+#[pyfunction]
+#[pyo3(name = "refine")]
+pub fn py_refine(llm: PyObject, prompt: String) -> PyRefineBuilderV2 {
+    PyRefineBuilderV2::new(llm, prompt)
+}
 
 /// Chain of Thought reasoning.
 ///

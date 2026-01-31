@@ -913,6 +913,19 @@ impl<E: Embedder> Memory<E> {
         }
     }
 
+    /// Clear all documents.
+    pub fn clear(&mut self) {
+        match &mut self.store {
+            MemoryStore::InMemory(store) => {
+                store.documents.clear();
+            }
+            #[cfg(feature = "storage")]
+            MemoryStore::Persistent { conn, .. } => {
+                conn.execute("DELETE FROM documents", []).ok();
+            }
+        }
+    }
+
     /// Learn from a successful refinement (write-back).
     ///
     /// This is called by the refinement loop when a result meets the
