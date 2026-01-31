@@ -49,11 +49,11 @@ unsafe impl Sync for DynValidator {}
 /// This avoids holding trait objects that can't be cloned for the builder pattern.
 pub(crate) enum ValidatorNode {
     /// A pattern-based checks validator.
-    Checks(Checks),
+    Checks(Box<Checks>),
     /// A semantic (LLM-as-judge) validator.
     Semantic(SemanticConfig),
     /// A CLI-based validator (external tool validation).
-    Cli(kkachi::recursive::Cli),
+    Cli(Box<kkachi::recursive::Cli>),
     /// Both children must pass.
     And(Box<ValidatorNode>, Box<ValidatorNode>),
     /// At least one child must pass.
@@ -68,9 +68,9 @@ impl ValidatorNode {
     /// Materialize this node tree into a concrete validator.
     pub fn materialize(&self, py: Python<'_>) -> Box<dyn Validate> {
         match self {
-            Self::Checks(checks) => Box::new(checks.clone()),
+            Self::Checks(checks) => Box::new((**checks).clone()),
             Self::Semantic(cfg) => cfg.materialize(py),
-            Self::Cli(cli) => Box::new(cli.clone()),
+            Self::Cli(cli) => Box::new((**cli).clone()),
             Self::And(a, b) => {
                 let va = DynValidator(a.materialize(py));
                 let vb = DynValidator(b.materialize(py));
@@ -102,7 +102,7 @@ impl ValidatorNode {
 impl Clone for ValidatorNode {
     fn clone(&self) -> Self {
         match self {
-            Self::Checks(c) => Self::Checks(c.clone()),
+            Self::Checks(c) => Self::Checks(Box::new((**c).clone())),
             Self::Semantic(cfg) => Self::Semantic(cfg.clone()),
             Self::Cli(cli) => Self::Cli(cli.clone()),
             Self::And(a, b) => Self::And(a.clone(), b.clone()),
@@ -310,13 +310,13 @@ pub(crate) fn extract_validator_node(obj: &Bound<'_, PyAny>) -> PyResult<Validat
     use crate::validator::PyCliValidator;
 
     if let Ok(checks) = obj.downcast::<PyChecks>() {
-        Ok(ValidatorNode::Checks(checks.borrow().inner_ref().clone()))
+        Ok(ValidatorNode::Checks(Box::new(checks.borrow().inner_ref().clone())))
     } else if let Ok(semantic) = obj.downcast::<PySemantic>() {
         Ok(semantic.borrow().to_validator_node())
     } else if let Ok(cli_validator) = obj.downcast::<PyCliValidator>() {
-        Ok(ValidatorNode::Cli(
+        Ok(ValidatorNode::Cli(Box::new(
             cli_validator.borrow().inner_ref().clone(),
-        ))
+        )))
     } else if let Ok(validator) = obj.downcast::<PyValidator>() {
         Ok(validator.borrow().node.clone())
     } else {

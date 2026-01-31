@@ -93,7 +93,7 @@ impl Llm for PyCallableLlm {
 
         match result {
             Ok(text) => std::future::ready(Ok(LmOutput::new(text))),
-            Err(e) => std::future::ready(Err(kkachi::error::Error::module(&format!(
+            Err(e) => std::future::ready(Err(kkachi::error::Error::module(format!(
                 "Python LLM error: {}",
                 e
             )))),
@@ -143,7 +143,7 @@ impl Tool for PyCallableTool {
 
         Box::pin(std::future::ready(match result {
             Ok(text) => Ok(text),
-            Err(e) => Err(kkachi::error::Error::module(&format!(
+            Err(e) => Err(kkachi::error::Error::module(format!(
                 "Python tool error: {}",
                 e
             ))),
@@ -970,8 +970,8 @@ impl PyExecutor {
 ///     .max_iter(5) \\
 ///     .go()
 /// ```
-#[pyclass(name = "RefineBuilderV2")]
-pub struct PyRefineBuilderV2 {
+#[pyclass(name = "RefineBuilder")]
+pub struct PyRefineBuilder {
     llm: PyObject,
     prompt: String,
     max_iter: u32,
@@ -981,7 +981,7 @@ pub struct PyRefineBuilderV2 {
     validator: Option<ValidatorNode>,
 }
 
-impl Clone for PyRefineBuilderV2 {
+impl Clone for PyRefineBuilder {
     fn clone(&self) -> Self {
         Python::with_gil(|py| Self {
             llm: self.llm.clone_ref(py),
@@ -996,7 +996,7 @@ impl Clone for PyRefineBuilderV2 {
 }
 
 #[pymethods]
-impl PyRefineBuilderV2 {
+impl PyRefineBuilder {
     #[new]
     fn new(llm: PyObject, prompt: String) -> Self {
         Self {
@@ -1061,14 +1061,14 @@ impl PyRefineBuilderV2 {
 
     fn __repr__(&self) -> String {
         format!(
-            "RefineBuilderV2(prompt='{}', max_iter={})",
+            "RefineBuilder(prompt='{}', max_iter={})",
             truncate_str(&self.prompt, 30),
             self.max_iter
         )
     }
 }
 
-impl PyRefineBuilderV2 {
+impl PyRefineBuilder {
     /// Fast path: use LlmVariant directly (pure Rust async)
     fn run_with_api_llm(&self, llm: &crate::llm::LlmVariant) -> PyResult<PyRefineResult> {
         use kkachi::recursive::refine;
@@ -1262,12 +1262,35 @@ impl PyReasonBuilder {
 
     /// Execute the Chain of Thought reasoning.
     fn go(&self) -> PyResult<PyReasonResult> {
-        let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
+        Python::with_gil(|py| {
+            // Try ApiLlm first (fast path - no executor nesting)
+            if let Ok(api_llm) = self.llm.extract::<PyRef<crate::llm::PyApiLlm>>(py) {
+                return self.run_with_api_llm(api_llm.inner_ref());
+            }
+
+            // Fallback to PyCallableLlm (Python callable)
+            let callable_llm = PyCallableLlm::new_from_ref(py, &self.llm);
+            self.run_with_callable(&callable_llm)
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ReasonBuilder(prompt='{}', max_iter={})",
+            truncate_str(&self.prompt, 30),
+            self.max_iter
+        )
+    }
+}
+
+impl PyReasonBuilder {
+    fn run_with_api_llm(&self, llm: &crate::llm::LlmVariant) -> PyResult<PyReasonResult> {
+        
 
         let result = if let Some(ref node) = self.validator {
             // Composed validator takes priority
             let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
-            let mut builder = reason(&llm, &self.prompt)
+            let mut builder = reason(llm, &self.prompt)
                 .validate(dyn_v)
                 .max_iter(self.max_iter)
                 .target(self.target);
@@ -1291,7 +1314,7 @@ impl PyReasonBuilder {
                 if let Some(ref regex) = self.regex_pattern {
                     cb = cb.regex(regex);
                 }
-                let mut builder = reason(&llm, &self.prompt)
+                let mut builder = reason(llm, &self.prompt)
                     .validate(cb)
                     .max_iter(self.max_iter)
                     .target(self.target);
@@ -1300,7 +1323,7 @@ impl PyReasonBuilder {
                 }
                 builder.go()
             } else {
-                let mut builder = reason(&llm, &self.prompt)
+                let mut builder = reason(llm, &self.prompt)
                     .max_iter(self.max_iter)
                     .target(self.target);
                 if !self.include_reasoning {
@@ -1313,12 +1336,55 @@ impl PyReasonBuilder {
         Ok(result.into())
     }
 
-    fn __repr__(&self) -> String {
-        format!(
-            "ReasonBuilder(prompt='{}', max_iter={})",
-            truncate_str(&self.prompt, 30),
-            self.max_iter
-        )
+    fn run_with_callable(&self, llm: &PyCallableLlm) -> PyResult<PyReasonResult> {
+
+        let result = if let Some(ref node) = self.validator {
+            // Composed validator takes priority
+            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            let mut builder = reason(llm, &self.prompt)
+                .validate(dyn_v)
+                .max_iter(self.max_iter)
+                .target(self.target);
+            if !self.include_reasoning {
+                builder = builder.no_reasoning();
+            }
+            builder.go()
+        } else {
+            let has_inline = !self.require_patterns.is_empty()
+                || !self.forbid_patterns.is_empty()
+                || self.regex_pattern.is_some();
+
+            if has_inline {
+                let mut cb = checks();
+                for pattern in &self.require_patterns {
+                    cb = cb.require(pattern);
+                }
+                for pattern in &self.forbid_patterns {
+                    cb = cb.forbid(pattern);
+                }
+                if let Some(ref regex) = self.regex_pattern {
+                    cb = cb.regex(regex);
+                }
+                let mut builder = reason(llm, &self.prompt)
+                    .validate(cb)
+                    .max_iter(self.max_iter)
+                    .target(self.target);
+                if !self.include_reasoning {
+                    builder = builder.no_reasoning();
+                }
+                builder.go()
+            } else {
+                let mut builder = reason(llm, &self.prompt)
+                    .max_iter(self.max_iter)
+                    .target(self.target);
+                if !self.include_reasoning {
+                    builder = builder.no_reasoning();
+                }
+                builder.go()
+            }
+        };
+
+        Ok(result.into())
     }
 }
 
@@ -1397,9 +1463,7 @@ impl PyBestOfBuilder {
     ///     scorer: A callable `(output: str) -> float` returning 0.0-1.0.
     fn metric(&self, scorer: PyObject) -> Self {
         let mut new = self.clone();
-        Python::with_gil(|py| {
-            new.scorer = Some(scorer.clone_ref(py));
-        });
+        new.scorer = Python::with_gil(|py| Some(scorer.clone_ref(py)));
         new
     }
 
@@ -1453,7 +1517,19 @@ impl PyBestOfBuilder {
 
 impl PyBestOfBuilder {
     fn run_internal(&self) -> PyResult<(PyBestOfResult, PyCandidatePool)> {
-        let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
+        Python::with_gil(|py| {
+            // Try ApiLlm first (fast path - no executor nesting)
+            if let Ok(api_llm) = self.llm.extract::<PyRef<crate::llm::PyApiLlm>>(py) {
+                return self.run_internal_with_api_llm(api_llm.inner_ref());
+            }
+
+            // Fallback to PyCallableLlm (Python callable)
+            let callable_llm = PyCallableLlm::new_from_ref(py, &self.llm);
+            self.run_internal_with_callable(&callable_llm)
+        })
+    }
+
+    fn run_internal_with_api_llm(&self, llm: &crate::llm::LlmVariant) -> PyResult<(PyBestOfResult, PyCandidatePool)> {
         let scorer_obj = Python::with_gil(|py| self.scorer.as_ref().map(|s| s.clone_ref(py)));
 
         // Build scorer closure if provided
@@ -1472,7 +1548,7 @@ impl PyBestOfBuilder {
             // Composed validator takes priority
             let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
             if let Some(scorer) = py_scorer {
-                let mut builder = best_of(&llm, &self.prompt)
+                let mut builder = best_of(llm, &self.prompt)
                     .n(self.n)
                     .validate(dyn_v)
                     .metric(scorer)
@@ -1482,7 +1558,7 @@ impl PyBestOfBuilder {
                 }
                 builder.go_with_pool()
             } else {
-                let mut builder = best_of(&llm, &self.prompt)
+                let mut builder = best_of(llm, &self.prompt)
                     .n(self.n)
                     .validate(dyn_v)
                     .scorer_weight(self.scorer_weight);
@@ -1504,7 +1580,7 @@ impl PyBestOfBuilder {
                 }
 
                 if let Some(scorer) = py_scorer {
-                    let mut builder = best_of(&llm, &self.prompt)
+                    let mut builder = best_of(llm, &self.prompt)
                         .n(self.n)
                         .validate(cb)
                         .metric(scorer)
@@ -1514,7 +1590,7 @@ impl PyBestOfBuilder {
                     }
                     builder.go_with_pool()
                 } else {
-                    let mut builder = best_of(&llm, &self.prompt)
+                    let mut builder = best_of(llm, &self.prompt)
                         .n(self.n)
                         .validate(cb)
                         .scorer_weight(self.scorer_weight);
@@ -1524,7 +1600,7 @@ impl PyBestOfBuilder {
                     builder.go_with_pool()
                 }
             } else if let Some(scorer) = py_scorer {
-                let mut builder = best_of(&llm, &self.prompt)
+                let mut builder = best_of(llm, &self.prompt)
                     .n(self.n)
                     .metric(scorer)
                     .scorer_weight(self.scorer_weight);
@@ -1533,7 +1609,110 @@ impl PyBestOfBuilder {
                 }
                 builder.go_with_pool()
             } else {
-                let mut builder = best_of(&llm, &self.prompt)
+                let mut builder = best_of(llm, &self.prompt)
+                    .n(self.n)
+                    .scorer_weight(self.scorer_weight);
+                if self.with_reasoning {
+                    builder = builder.with_reasoning();
+                }
+                builder.go_with_pool()
+            }
+        };
+
+        let py_result = PyBestOfResult::from(result);
+        let py_pool = PyCandidatePool {
+            candidates: pool
+                .candidates()
+                .iter()
+                .map(PyScoredCandidate::from)
+                .collect(),
+            total_tokens: pool.total_tokens(),
+        };
+
+        Ok((py_result, py_pool))
+    }
+
+    fn run_internal_with_callable(&self, llm: &PyCallableLlm) -> PyResult<(PyBestOfResult, PyCandidatePool)> {
+        let scorer_obj = Python::with_gil(|py| self.scorer.as_ref().map(|s| s.clone_ref(py)));
+
+        // Build scorer closure if provided
+        let py_scorer = scorer_obj.map(|scorer_py| {
+            move |output: &str| -> f64 {
+                Python::with_gil(|py| {
+                    scorer_py
+                        .call1(py, (output.to_string(),))
+                        .and_then(|r| r.extract::<f64>(py))
+                        .unwrap_or(0.0)
+                })
+            }
+        });
+
+        let (result, pool) = if let Some(ref node) = self.validator {
+            // Composed validator takes priority
+            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            if let Some(scorer) = py_scorer {
+                let mut builder = best_of(llm, &self.prompt)
+                    .n(self.n)
+                    .validate(dyn_v)
+                    .metric(scorer)
+                    .scorer_weight(self.scorer_weight);
+                if self.with_reasoning {
+                    builder = builder.with_reasoning();
+                }
+                builder.go_with_pool()
+            } else {
+                let mut builder = best_of(llm, &self.prompt)
+                    .n(self.n)
+                    .validate(dyn_v)
+                    .scorer_weight(self.scorer_weight);
+                if self.with_reasoning {
+                    builder = builder.with_reasoning();
+                }
+                builder.go_with_pool()
+            }
+        } else {
+            let has_inline = !self.require_patterns.is_empty() || !self.forbid_patterns.is_empty();
+
+            if has_inline {
+                let mut cb = checks();
+                for pattern in &self.require_patterns {
+                    cb = cb.require(pattern);
+                }
+                for pattern in &self.forbid_patterns {
+                    cb = cb.forbid(pattern);
+                }
+
+                if let Some(scorer) = py_scorer {
+                    let mut builder = best_of(llm, &self.prompt)
+                        .n(self.n)
+                        .validate(cb)
+                        .metric(scorer)
+                        .scorer_weight(self.scorer_weight);
+                    if self.with_reasoning {
+                        builder = builder.with_reasoning();
+                    }
+                    builder.go_with_pool()
+                } else {
+                    let mut builder = best_of(llm, &self.prompt)
+                        .n(self.n)
+                        .validate(cb)
+                        .scorer_weight(self.scorer_weight);
+                    if self.with_reasoning {
+                        builder = builder.with_reasoning();
+                    }
+                    builder.go_with_pool()
+                }
+            } else if let Some(scorer) = py_scorer {
+                let mut builder = best_of(llm, &self.prompt)
+                    .n(self.n)
+                    .metric(scorer)
+                    .scorer_weight(self.scorer_weight);
+                if self.with_reasoning {
+                    builder = builder.with_reasoning();
+                }
+                builder.go_with_pool()
+            } else {
+                let mut builder = best_of(llm, &self.prompt)
                     .n(self.n)
                     .scorer_weight(self.scorer_weight);
                 if self.with_reasoning {
@@ -1694,12 +1873,24 @@ impl PyEnsembleBuilder {
     }
 
     fn run_internal(&self) -> PyResult<(PyEnsembleResult, PyConsensusPool)> {
-        let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
+        Python::with_gil(|py| {
+            // Try ApiLlm first (fast path - no executor nesting)
+            if let Ok(api_llm) = self.llm.extract::<PyRef<crate::llm::PyApiLlm>>(py) {
+                return self.run_internal_with_api_llm(api_llm.inner_ref());
+            }
+
+            // Fallback to PyCallableLlm (Python callable)
+            let callable_llm = PyCallableLlm::new_from_ref(py, &self.llm);
+            self.run_internal_with_callable(&callable_llm)
+        })
+    }
+
+    fn run_internal_with_api_llm(&self, llm: &crate::llm::LlmVariant) -> PyResult<(PyEnsembleResult, PyConsensusPool)> {
         let aggregate = self.parse_aggregate();
 
         let (result, consensus) = if let Some(ref node) = self.validator {
             let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
-            let mut builder = ensemble(&llm, &self.prompt)
+            let mut builder = ensemble(llm, &self.prompt)
                 .n(self.n)
                 .validate(dyn_v)
                 .aggregate(aggregate);
@@ -1721,7 +1912,7 @@ impl PyEnsembleBuilder {
                 for pattern in &self.forbid_patterns {
                     cb = cb.forbid(pattern);
                 }
-                let mut builder = ensemble(&llm, &self.prompt)
+                let mut builder = ensemble(llm, &self.prompt)
                     .n(self.n)
                     .validate(cb)
                     .aggregate(aggregate);
@@ -1733,7 +1924,66 @@ impl PyEnsembleBuilder {
                 }
                 builder.go_with_consensus()
             } else {
-                let mut builder = ensemble(&llm, &self.prompt).n(self.n).aggregate(aggregate);
+                let mut builder = ensemble(llm, &self.prompt).n(self.n).aggregate(aggregate);
+                if self.with_reasoning {
+                    builder = builder.with_reasoning();
+                }
+                if !self.normalize {
+                    builder = builder.no_normalize();
+                }
+                builder.go_with_consensus()
+            }
+        };
+
+        let py_result = PyEnsembleResult::from(result);
+        let py_consensus = PyConsensusPool {
+            chains: consensus.chains().iter().map(PyChainResult::from).collect(),
+            selected: consensus.selected().to_string(),
+        };
+
+        Ok((py_result, py_consensus))
+    }
+
+    fn run_internal_with_callable(&self, llm: &PyCallableLlm) -> PyResult<(PyEnsembleResult, PyConsensusPool)> {
+        let aggregate = self.parse_aggregate();
+
+        let (result, consensus) = if let Some(ref node) = self.validator {
+            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            let mut builder = ensemble(llm, &self.prompt)
+                .n(self.n)
+                .validate(dyn_v)
+                .aggregate(aggregate);
+            if self.with_reasoning {
+                builder = builder.with_reasoning();
+            }
+            if !self.normalize {
+                builder = builder.no_normalize();
+            }
+            builder.go_with_consensus()
+        } else {
+            let has_inline = !self.require_patterns.is_empty() || !self.forbid_patterns.is_empty();
+
+            if has_inline {
+                let mut cb = checks();
+                for pattern in &self.require_patterns {
+                    cb = cb.require(pattern);
+                }
+                for pattern in &self.forbid_patterns {
+                    cb = cb.forbid(pattern);
+                }
+                let mut builder = ensemble(llm, &self.prompt)
+                    .n(self.n)
+                    .validate(cb)
+                    .aggregate(aggregate);
+                if self.with_reasoning {
+                    builder = builder.with_reasoning();
+                }
+                if !self.normalize {
+                    builder = builder.no_normalize();
+                }
+                builder.go_with_consensus()
+            } else {
+                let mut builder = ensemble(llm, &self.prompt).n(self.n).aggregate(aggregate);
                 if self.with_reasoning {
                     builder = builder.with_reasoning();
                 }
@@ -1816,8 +2066,30 @@ impl PyAgentBuilder {
 
     /// Execute the agent.
     fn go(&self) -> PyResult<PyAgentResult> {
-        let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
+        Python::with_gil(|py| {
+            // Try ApiLlm first (fast path - no executor nesting)
+            if let Ok(api_llm) = self.llm.extract::<PyRef<crate::llm::PyApiLlm>>(py) {
+                return self.run_with_api_llm(api_llm.inner_ref());
+            }
 
+            // Fallback to PyCallableLlm (Python callable)
+            let callable_llm = PyCallableLlm::new_from_ref(py, &self.llm);
+            self.run_with_callable(&callable_llm)
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AgentBuilder(goal='{}', tools={}, max_steps={})",
+            truncate_str(&self.goal, 30),
+            self.tools.len(),
+            self.max_steps
+        )
+    }
+}
+
+impl PyAgentBuilder {
+    fn run_with_api_llm(&self, llm: &crate::llm::LlmVariant) -> PyResult<PyAgentResult> {
         // Create Rust tools from PyToolDefs
         let rust_tools: Vec<PyCallableTool> = Python::with_gil(|py| {
             self.tools
@@ -1831,7 +2103,7 @@ impl PyAgentBuilder {
         });
 
         // Build the agent with tool references
-        let mut builder = agent(&llm, &self.goal).max_steps(self.max_steps);
+        let mut builder = agent(llm, &self.goal).max_steps(self.max_steps);
         for tool in &rust_tools {
             builder = builder.tool(tool);
         }
@@ -1848,13 +2120,35 @@ impl PyAgentBuilder {
         })
     }
 
-    fn __repr__(&self) -> String {
-        format!(
-            "AgentBuilder(goal='{}', tools={}, max_steps={})",
-            truncate_str(&self.goal, 30),
-            self.tools.len(),
-            self.max_steps
-        )
+    fn run_with_callable(&self, llm: &PyCallableLlm) -> PyResult<PyAgentResult> {
+        // Create Rust tools from PyToolDefs
+        let rust_tools: Vec<PyCallableTool> = Python::with_gil(|py| {
+            self.tools
+                .iter()
+                .map(|t| PyCallableTool {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    callable: t.callable.clone_ref(py),
+                })
+                .collect()
+        });
+
+        // Build the agent with tool references
+        let mut builder = agent(llm, &self.goal).max_steps(self.max_steps);
+        for tool in &rust_tools {
+            builder = builder.tool(tool);
+        }
+
+        let result = builder.go();
+
+        Ok(PyAgentResult {
+            output: result.output,
+            steps: result.steps,
+            tokens: result.tokens,
+            success: result.success,
+            error: result.error,
+            trajectory: result.trajectory.iter().map(PyStep::from).collect(),
+        })
     }
 }
 
@@ -1985,12 +2279,36 @@ impl PyProgramBuilder {
             PyRuntimeError::new_err("No executor set. Use .executor(Executor.python()) or similar.")
         })?;
 
-        let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
+        Python::with_gil(|py| {
+            // Try ApiLlm first (fast path - no executor nesting)
+            if let Ok(api_llm) = self.llm.extract::<PyRef<crate::llm::PyApiLlm>>(py) {
+                return self.run_with_api_llm(api_llm.inner_ref(), executor);
+            }
+
+            // Fallback to PyCallableLlm (Python callable)
+            let callable_llm = PyCallableLlm::new_from_ref(py, &self.llm);
+            self.run_with_callable(&callable_llm, executor)
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ProgramBuilder(problem='{}', max_iter={})",
+            truncate_str(&self.problem, 30),
+            self.max_iter
+        )
+    }
+}
+
+impl PyProgramBuilder {
+    fn run_with_api_llm(&self, llm: &crate::llm::LlmVariant, executor: &PyExecutor) -> PyResult<PyProgramResult> {
+        
+
         let rust_executor = executor.build_executor();
 
         let result = if let Some(ref node) = self.validator {
             let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
-            let mut builder = program(&llm, &self.problem)
+            let mut builder = program(llm, &self.problem)
                 .executor(rust_executor)
                 .validate(dyn_v)
                 .max_iter(self.max_iter as u32);
@@ -2017,7 +2335,7 @@ impl PyProgramBuilder {
                 if let Some(ref regex) = self.regex_pattern {
                     cb = cb.regex(regex);
                 }
-                let mut builder = program(&llm, &self.problem)
+                let mut builder = program(llm, &self.problem)
                     .executor(rust_executor)
                     .validate(cb)
                     .max_iter(self.max_iter as u32);
@@ -2029,7 +2347,7 @@ impl PyProgramBuilder {
                 }
                 builder.go()
             } else {
-                let mut builder = program(&llm, &self.problem)
+                let mut builder = program(llm, &self.problem)
                     .executor(rust_executor)
                     .max_iter(self.max_iter as u32);
                 if !self.include_code {
@@ -2045,12 +2363,65 @@ impl PyProgramBuilder {
         Ok(result.into())
     }
 
-    fn __repr__(&self) -> String {
-        format!(
-            "ProgramBuilder(problem='{}', max_iter={})",
-            truncate_str(&self.problem, 30),
-            self.max_iter
-        )
+    fn run_with_callable(&self, llm: &PyCallableLlm, executor: &PyExecutor) -> PyResult<PyProgramResult> {
+
+        let rust_executor = executor.build_executor();
+
+        let result = if let Some(ref node) = self.validator {
+            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            let mut builder = program(llm, &self.problem)
+                .executor(rust_executor)
+                .validate(dyn_v)
+                .max_iter(self.max_iter as u32);
+            if !self.include_code {
+                builder = builder.no_code();
+            }
+            if let Some(ref lang) = self.language {
+                builder = builder.language(lang);
+            }
+            builder.go()
+        } else {
+            let has_inline = !self.require_patterns.is_empty()
+                || !self.forbid_patterns.is_empty()
+                || self.regex_pattern.is_some();
+
+            if has_inline {
+                let mut cb = checks();
+                for pattern in &self.require_patterns {
+                    cb = cb.require(pattern);
+                }
+                for pattern in &self.forbid_patterns {
+                    cb = cb.forbid(pattern);
+                }
+                if let Some(ref regex) = self.regex_pattern {
+                    cb = cb.regex(regex);
+                }
+                let mut builder = program(llm, &self.problem)
+                    .executor(rust_executor)
+                    .validate(cb)
+                    .max_iter(self.max_iter as u32);
+                if !self.include_code {
+                    builder = builder.no_code();
+                }
+                if let Some(ref lang) = self.language {
+                    builder = builder.language(lang);
+                }
+                builder.go()
+            } else {
+                let mut builder = program(llm, &self.problem)
+                    .executor(rust_executor)
+                    .max_iter(self.max_iter as u32);
+                if !self.include_code {
+                    builder = builder.no_code();
+                }
+                if let Some(ref lang) = self.language {
+                    builder = builder.language(lang);
+                }
+                builder.go()
+            }
+        };
+
+        Ok(result.into())
     }
 }
 
@@ -2079,8 +2450,8 @@ impl PyProgramBuilder {
 ///     ```
 #[pyfunction]
 #[pyo3(name = "refine")]
-pub fn py_refine(llm: PyObject, prompt: String) -> PyRefineBuilderV2 {
-    PyRefineBuilderV2::new(llm, prompt)
+pub fn py_refine(llm: PyObject, prompt: String) -> PyRefineBuilder {
+    PyRefineBuilder::new(llm, prompt)
 }
 
 /// Chain of Thought reasoning.
