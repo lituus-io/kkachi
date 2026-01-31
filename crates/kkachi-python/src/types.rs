@@ -192,6 +192,84 @@ impl PyMemory {
         self.inner.tags()
     }
 
+    /// Search with diversity using MMR (Maximal Marginal Relevance).
+    ///
+    /// Args:
+    ///     query (str): Search query
+    ///     k (int): Number of results to return
+    ///     min_similarity (float): Balance between relevance and diversity (0.0=diversity, 1.0=relevance)
+    ///
+    /// Returns:
+    ///     List[Recall]: Diverse search results
+    ///
+    /// Example:
+    ///     ```python
+    ///     mem = Memory()
+    ///     mem.add("Doc 1 about Python")
+    ///     mem.add("Doc 2 about Python")
+    ///     mem.add("Doc 3 about Rust")
+    ///     results = mem.search_diverse("programming", k=2, min_similarity=0.5)
+    ///     ```
+    fn search_diverse(&self, query: &str, k: usize, min_similarity: f64) -> Vec<PyRecall> {
+        self.inner
+            .search_diverse(query, k, min_similarity.clamp(0.0, 1.0))
+            .into_iter()
+            .map(|r| r.into())
+            .collect()
+    }
+
+    /// List all documents.
+    ///
+    /// Returns:
+    ///     List[Recall]: All documents with score=1.0
+    ///
+    /// Example:
+    ///     ```python
+    ///     mem = Memory()
+    ///     mem.add("Doc 1")
+    ///     mem.add("Doc 2")
+    ///     all_docs = mem.list()
+    ///     assert len(all_docs) == 2
+    ///     ```
+    fn list(&self) -> Vec<PyRecall> {
+        self.inner.all().into_iter().map(|r| r.into()).collect()
+    }
+
+    /// Delete a document by ID (alias for remove).
+    ///
+    /// Args:
+    ///     id (str): Document ID to delete
+    ///
+    /// Returns:
+    ///     bool: True if document was deleted, False otherwise
+    ///
+    /// Example:
+    ///     ```python
+    ///     mem = Memory()
+    ///     doc_id = mem.add("Test document")
+    ///     assert mem.delete(doc_id) == True
+    ///     assert mem.get(doc_id) is None
+    ///     ```
+    fn delete(&mut self, id: &str) -> bool {
+        self.inner.remove(id)
+    }
+
+    /// Clear all documents.
+    ///
+    /// Example:
+    ///     ```python
+    ///     mem = Memory()
+    ///     mem.add("Doc 1")
+    ///     mem.add("Doc 2")
+    ///     assert mem.len() == 2
+    ///
+    ///     mem.clear()
+    ///     assert mem.len() == 0
+    ///     ```
+    fn clear(&mut self) {
+        self.inner.clear();
+    }
+
     /// Enable persistent storage using DuckDB.
     ///
     /// Args:

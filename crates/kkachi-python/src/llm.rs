@@ -459,6 +459,52 @@ impl PyApiLlm {
         self.inner.max_context()
     }
 
+    /// Call the LLM directly: llm(prompt, feedback) -> str
+    ///
+    /// Args:
+    ///     prompt (str): The prompt to send to the LLM
+    ///     feedback (str, optional): Optional feedback from previous iteration
+    ///
+    /// Returns:
+    ///     str: The LLM's response text
+    ///
+    /// Example:
+    ///     ```python
+    ///     llm = ApiLlm.from_env()
+    ///     response = llm("Say hello", None)
+    ///     print(response)
+    ///     ```
+    #[pyo3(signature = (prompt, feedback=None))]
+    fn __call__(&self, prompt: String, feedback: Option<String>) -> PyResult<String> {
+        self.generate_impl(prompt, String::new(), feedback)
+    }
+
+    /// Generate a response with explicit parameters.
+    ///
+    /// Args:
+    ///     prompt (str): The prompt to send to the LLM
+    ///     context (str, optional): Additional context (e.g., from RAG)
+    ///     feedback (str, optional): Optional feedback from previous iteration
+    ///
+    /// Returns:
+    ///     str: The LLM's response text
+    ///
+    /// Example:
+    ///     ```python
+    ///     llm = ApiLlm.from_env()
+    ///     response = llm.generate("Question", context="Background info", feedback=None)
+    ///     print(response)
+    ///     ```
+    #[pyo3(signature = (prompt, context=None, feedback=None))]
+    fn generate(
+        &self,
+        prompt: String,
+        context: Option<String>,
+        feedback: Option<String>,
+    ) -> PyResult<String> {
+        self.generate_impl(prompt, context.unwrap_or_default(), feedback)
+    }
+
     fn __repr__(&self) -> String {
         use kkachi::recursive::llm::Llm;
         format!(
@@ -470,6 +516,29 @@ impl PyApiLlm {
 }
 
 impl PyApiLlm {
+    /// Internal: Sync wrapper around async generate()
+    fn generate_impl(
+        &self,
+        prompt: String,
+        context: String,
+        feedback: Option<String>,
+    ) -> PyResult<String> {
+        use kkachi::recursive::llm::Llm;
+        use pyo3::exceptions::PyRuntimeError;
+
+        Python::with_gil(|py| {
+            py.allow_threads(|| {
+                futures::executor::block_on(async {
+                    self.inner
+                        .generate(&prompt, &context, feedback.as_deref())
+                        .await
+                        .map(|output| output.text)
+                        .map_err(|e| PyRuntimeError::new_err(format!("LLM generate error: {}", e)))
+                })
+            })
+        })
+    }
+
     /// Get a reference to the inner LLM variant
     pub fn inner_ref(&self) -> &LlmVariant {
         &self.inner

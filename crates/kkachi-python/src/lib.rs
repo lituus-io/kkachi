@@ -95,6 +95,7 @@ fn _kkachi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_extract_all_code, m)?)?;
 
     // DSPy-style modules - Builders
+    m.add_class::<PyRefineBuilderV2>()?;
     m.add_class::<PyReasonBuilder>()?;
     m.add_class::<PyBestOfBuilder>()?;
     m.add_class::<PyEnsembleBuilder>()?;
@@ -120,6 +121,7 @@ fn _kkachi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyExecutor>()?;
 
     // DSPy-style modules - Entry point functions
+    m.add_function(wrap_pyfunction!(py_refine, m)?)?;
     m.add_function(wrap_pyfunction!(py_reason, m)?)?;
     m.add_function(wrap_pyfunction!(py_best_of, m)?)?;
     m.add_function(wrap_pyfunction!(py_ensemble, m)?)?;

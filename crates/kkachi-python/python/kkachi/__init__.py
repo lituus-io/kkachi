@@ -47,12 +47,14 @@ from kkachi._kkachi import (
     Memory,
     Recall,
     # DSPy-style entry point functions
+    refine,
     reason,
     best_of,
     ensemble,
     agent,
     program,
     # DSPy-style builders
+    RefineBuilderV2,
     ReasonBuilder,
     BestOfBuilder,
     EnsembleBuilder,
@@ -106,12 +108,14 @@ __all__ = [
     "Memory",
     "Recall",
     # DSPy-style entry point functions
+    "refine",
     "reason",
     "best_of",
     "ensemble",
     "agent",
     "program",
     # DSPy-style builders
+    "RefineBuilderV2",
     "ReasonBuilder",
     "BestOfBuilder",
     "EnsembleBuilder",
