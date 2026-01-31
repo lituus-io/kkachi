@@ -10,7 +10,6 @@ authors = [
     { name = "lituus-io", email = "spicyzhug@gmail.com" }
 ]
 description = "High-performance LLM prompt optimization library"
-readme = "README.md"
 keywords = ["llm", "optimization", "dspy", "prompting", "ai"]
 classifiers = [
     "Development Status :: 4 - Beta",
