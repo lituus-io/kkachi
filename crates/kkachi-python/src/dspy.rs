@@ -1285,8 +1285,6 @@ impl PyReasonBuilder {
 
 impl PyReasonBuilder {
     fn run_with_api_llm(&self, llm: &crate::llm::LlmVariant) -> PyResult<PyReasonResult> {
-        
-
         let result = if let Some(ref node) = self.validator {
             // Composed validator takes priority
             let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
@@ -1337,7 +1335,6 @@ impl PyReasonBuilder {
     }
 
     fn run_with_callable(&self, llm: &PyCallableLlm) -> PyResult<PyReasonResult> {
-
         let result = if let Some(ref node) = self.validator {
             // Composed validator takes priority
             let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
@@ -1529,7 +1526,10 @@ impl PyBestOfBuilder {
         })
     }
 
-    fn run_internal_with_api_llm(&self, llm: &crate::llm::LlmVariant) -> PyResult<(PyBestOfResult, PyCandidatePool)> {
+    fn run_internal_with_api_llm(
+        &self,
+        llm: &crate::llm::LlmVariant,
+    ) -> PyResult<(PyBestOfResult, PyCandidatePool)> {
         let scorer_obj = Python::with_gil(|py| self.scorer.as_ref().map(|s| s.clone_ref(py)));
 
         // Build scorer closure if provided
@@ -1632,7 +1632,10 @@ impl PyBestOfBuilder {
         Ok((py_result, py_pool))
     }
 
-    fn run_internal_with_callable(&self, llm: &PyCallableLlm) -> PyResult<(PyBestOfResult, PyCandidatePool)> {
+    fn run_internal_with_callable(
+        &self,
+        llm: &PyCallableLlm,
+    ) -> PyResult<(PyBestOfResult, PyCandidatePool)> {
         let scorer_obj = Python::with_gil(|py| self.scorer.as_ref().map(|s| s.clone_ref(py)));
 
         // Build scorer closure if provided
@@ -1885,7 +1888,10 @@ impl PyEnsembleBuilder {
         })
     }
 
-    fn run_internal_with_api_llm(&self, llm: &crate::llm::LlmVariant) -> PyResult<(PyEnsembleResult, PyConsensusPool)> {
+    fn run_internal_with_api_llm(
+        &self,
+        llm: &crate::llm::LlmVariant,
+    ) -> PyResult<(PyEnsembleResult, PyConsensusPool)> {
         let aggregate = self.parse_aggregate();
 
         let (result, consensus) = if let Some(ref node) = self.validator {
@@ -1944,7 +1950,10 @@ impl PyEnsembleBuilder {
         Ok((py_result, py_consensus))
     }
 
-    fn run_internal_with_callable(&self, llm: &PyCallableLlm) -> PyResult<(PyEnsembleResult, PyConsensusPool)> {
+    fn run_internal_with_callable(
+        &self,
+        llm: &PyCallableLlm,
+    ) -> PyResult<(PyEnsembleResult, PyConsensusPool)> {
         let aggregate = self.parse_aggregate();
 
         let (result, consensus) = if let Some(ref node) = self.validator {
@@ -2301,9 +2310,11 @@ impl PyProgramBuilder {
 }
 
 impl PyProgramBuilder {
-    fn run_with_api_llm(&self, llm: &crate::llm::LlmVariant, executor: &PyExecutor) -> PyResult<PyProgramResult> {
-        
-
+    fn run_with_api_llm(
+        &self,
+        llm: &crate::llm::LlmVariant,
+        executor: &PyExecutor,
+    ) -> PyResult<PyProgramResult> {
         let rust_executor = executor.build_executor();
 
         let result = if let Some(ref node) = self.validator {
@@ -2363,8 +2374,11 @@ impl PyProgramBuilder {
         Ok(result.into())
     }
 
-    fn run_with_callable(&self, llm: &PyCallableLlm, executor: &PyExecutor) -> PyResult<PyProgramResult> {
-
+    fn run_with_callable(
+        &self,
+        llm: &PyCallableLlm,
+        executor: &PyExecutor,
+    ) -> PyResult<PyProgramResult> {
         let rust_executor = executor.build_executor();
 
         let result = if let Some(ref node) = self.validator {

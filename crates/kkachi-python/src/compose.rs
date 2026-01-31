@@ -310,7 +310,9 @@ pub(crate) fn extract_validator_node(obj: &Bound<'_, PyAny>) -> PyResult<Validat
     use crate::validator::PyCliValidator;
 
     if let Ok(checks) = obj.downcast::<PyChecks>() {
-        Ok(ValidatorNode::Checks(Box::new(checks.borrow().inner_ref().clone())))
+        Ok(ValidatorNode::Checks(Box::new(
+            checks.borrow().inner_ref().clone(),
+        )))
     } else if let Ok(semantic) = obj.downcast::<PySemantic>() {
         Ok(semantic.borrow().to_validator_node())
     } else if let Ok(cli_validator) = obj.downcast::<PyCliValidator>() {
