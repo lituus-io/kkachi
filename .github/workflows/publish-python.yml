@@ -85,7 +85,7 @@ jobs:
           python -c "
           import kkachi
           print(f'kkachi {kkachi.__version__}')
-          from kkachi import Checks, Kkachi, RefineResult, Memory
+          from kkachi import Checks, refine, ApiLlm, Memory
           c = Checks().require('fn ').forbid('todo!')
           # Test storage functionality
           import tempfile, os
