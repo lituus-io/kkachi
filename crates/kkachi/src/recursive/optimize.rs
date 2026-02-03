@@ -215,6 +215,24 @@ impl<'a, L: Llm> Optimizer<'a, L> {
     }
 
     /// Run the optimization and return the best prompt configuration.
+    ///
+    /// If called inside a tokio runtime, uses `block_in_place`. Otherwise,
+    /// creates a new single-threaded runtime.
+    #[cfg(feature = "native")]
+    pub fn go(self) -> OptimizeResult {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.run()))
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime")
+                .block_on(self.run())
+        }
+    }
+
+    /// Run the optimization (fallback without tokio).
+    #[cfg(not(feature = "native"))]
     pub fn go(self) -> OptimizeResult {
         futures::executor::block_on(self.run())
     }

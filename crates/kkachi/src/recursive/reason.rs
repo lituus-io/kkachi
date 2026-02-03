@@ -200,6 +200,24 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
     }
 
     /// Execute synchronously and return the result.
+    ///
+    /// If called inside a tokio runtime, uses `block_in_place`. Otherwise,
+    /// creates a new single-threaded runtime.
+    #[cfg(feature = "native")]
+    pub fn go(self) -> ReasonResult {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.run()))
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime")
+                .block_on(self.run())
+        }
+    }
+
+    /// Execute synchronously (fallback without tokio).
+    #[cfg(not(feature = "native"))]
     pub fn go(self) -> ReasonResult {
         futures::executor::block_on(self.run())
     }
