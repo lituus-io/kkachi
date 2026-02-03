@@ -146,6 +146,24 @@ impl<'a, L: Llm> Agent<'a, L> {
     }
 
     /// Execute the agent synchronously.
+    ///
+    /// If called inside a tokio runtime, uses `block_in_place`. Otherwise,
+    /// creates a new single-threaded runtime.
+    #[cfg(feature = "native")]
+    pub fn go(self) -> AgentResult {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            tokio::task::block_in_place(|| handle.block_on(self.run()))
+        } else {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime")
+                .block_on(self.run())
+        }
+    }
+
+    /// Execute the agent (fallback without tokio).
+    #[cfg(not(feature = "native"))]
     pub fn go(self) -> AgentResult {
         futures::executor::block_on(self.run())
     }
