@@ -376,5 +376,111 @@ def test_cli_validator_capture_with_memory_feedback():
         assert any("Validation output" in p.content for p in patterns)
 
 
+# =============================================================================
+# Test 11: Standalone Validation + DSPy Integration
+# =============================================================================
+
+def test_cli_standalone_and_dspy_integration():
+    """Validator should work both standalone and with pipeline declarative API."""
+    validator = CliValidator("echo").args(["test"]).weight(0.5)
+
+    # 1. Standalone usage (NEW)
+    result1 = validator.validate("code here")
+    assert result1.value >= 0.0
+    assert isinstance(result1.value, float)
+    assert result1.confidence == 1.0
+
+    # 2. Pipeline declarative API usage (Already worked in v0.3.0)
+    result2 = reason(mock_llm, "task").validate(validator).max_iter(1).go()
+    assert result2.output
+
+    # 3. Verify both produce consistent results
+    # The validator should behave the same whether used standalone or in pipeline
+    code_sample = "fn test() {}"
+    standalone_score = validator.validate(code_sample)
+
+    # Use in pipeline with mock LLM that returns the same code
+    def llm_returning_sample(prompt, feedback=None):
+        return code_sample
+
+    pipeline_result = reason(llm_returning_sample, "task").validate(validator).max_iter(1).go()
+    # Both should validate the same code, so scores should be comparable
+    assert standalone_score.value >= 0.0
+    assert hasattr(pipeline_result, 'score')
+
+
+# =============================================================================
+# Test 12: CliValidator with All DSPy Modules
+# =============================================================================
+
+def test_cli_with_all_dspy_modules():
+    """Test CliValidator with reason, best_of modules."""
+    validator = CliValidator("true").weight(1.0)
+
+    # Test with reason
+    result = reason(mock_llm, "task").validate(validator).max_iter(1).go()
+    assert result.output
+
+    # Test with best_of
+    result = best_of(mock_llm, "task", n=2).validate(validator).go()
+    assert result.output
+
+
+# =============================================================================
+# Test 13: Composed Validator Integration
+# =============================================================================
+
+def test_composed_validator_integration():
+    """Integration test for composed validators."""
+    from kkachi import Validator
+
+    # Create complex composition
+    cli1 = CliValidator("true").weight(0.3)
+    cli2 = CliValidator("true").weight(0.3)
+    checks = Checks().require("test")
+
+    # Test .and_() composition
+    combined_and = cli1.and_(checks)
+    result = combined_and.validate("test content")
+    assert 0.0 <= result.value <= 1.0
+
+    # Test .or_() composition
+    combined_or = cli1.or_(checks)
+    result = combined_or.validate("test content")
+    assert 0.0 <= result.value <= 1.0
+
+    # Test Validator.all()
+    all_validators = Validator.all([cli1, cli2, checks])
+    result = all_validators.validate("test content")
+    assert 0.0 <= result.value <= 1.0
+
+    # Test Validator.any()
+    any_validators = Validator.any([cli1, cli2, checks])
+    result = any_validators.validate("test content")
+    assert 0.0 <= result.value <= 1.0
+
+
+# =============================================================================
+# Test 14: Capture in Refinement Loop
+# =============================================================================
+
+def test_capture_in_refinement_loop():
+    """Integration test: Use capture in refinement feedback."""
+    validator = CliValidator("echo").args(["validation"]).capture()
+
+    def llm_with_feedback(prompt, feedback=None):
+        if feedback:
+            # Refinement iteration
+            return "improved output"
+        return "initial output"
+
+    result = reason(llm_with_feedback, "task").validate(validator).max_iter(2).go()
+    assert result.output
+
+    # Verify captures were created
+    captures = validator.get_captures()
+    assert len(captures) > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -4,21 +4,33 @@
 
 //! COPRO - Coordinate Prompt Optimization
 //!
-//! Generates instruction variations using an LM and evaluates them
-//! to find the best performing instruction for a signature.
+//! Hill-climbing instruction optimizer that uses an LLM to generate candidate
+//! instructions and the [`Evaluate`] harness to score them on a training set.
 //!
 //! ## Algorithm
 //!
-//! 1. Start with base instruction from signature
-//! 2. Use LM to generate N instruction variations
-//! 3. Evaluate each variation on training set
-//! 4. Keep best performing instructions
-//! 5. Repeat with depth (refining previous best)
+//! 1. Start with base instruction from the caller
+//! 2. For each depth iteration:
+//!    a. Use the LLM to generate `breadth` instruction variations from the
+//!       current best instruction
+//!    b. Evaluate each candidate on the training set using the metric
+//!    c. Keep the best-scoring instruction
+//! 3. Return a [`CompiledProgram`] with the best instruction found
+//!
+//! ## Design
+//!
+//! - Uses the [`Llm`] trait (GATs) for both instruction generation and
+//!   candidate evaluation
+//! - Uses [`Evaluate`] + [`Metric`] for real evaluation on the trainset
+//! - Returns [`CompiledProgram`] for persistence
 
+use crate::compiled::CompiledProgram;
 use crate::error::Result;
+use crate::evaluate::Evaluate;
+use crate::intern::Sym;
+use crate::metric::Metric;
 use crate::optimizer::{ExampleSet, OptimizationResult, Optimizer, OptimizerConfig};
-use crate::predict::LMClient;
-use crate::str_view::StrView;
+use crate::recursive::llm::Llm;
 use smallvec::SmallVec;
 
 /// COPRO optimizer configuration.
@@ -71,8 +83,10 @@ impl COPROConfig {
 
 /// COPRO - Coordinate Prompt Optimization.
 ///
-/// Optimizes the instruction portion of a signature by generating
-/// variations and evaluating them.
+/// Optimizes the instruction portion of a prompt by generating candidate
+/// variations with the LLM and evaluating them on the training set using
+/// a metric. Hill-climbing: the best instruction from each iteration
+/// seeds the next round of generation.
 #[derive(Clone, Copy)]
 pub struct COPRO {
     config: COPROConfig,
@@ -95,6 +109,9 @@ impl COPRO {
     }
 
     /// Generate instruction candidates using an LM.
+    ///
+    /// Builds a meta-prompt asking the LLM to generate `breadth` variations
+    /// of the given instruction, then parses the numbered response.
     pub async fn generate_candidates<'a, L>(
         &self,
         base_instruction: &str,
@@ -103,11 +120,11 @@ impl COPRO {
         buffer: &'a mut Vec<u8>,
     ) -> Result<Vec<String>>
     where
-        L: LMClient,
+        L: Llm,
     {
         buffer.clear();
 
-        // Build prompt for instruction generation
+        // Build meta-prompt for instruction generation
         buffer.extend_from_slice(b"Generate ");
         buffer.extend_from_slice(self.config.breadth.to_string().as_bytes());
         buffer.extend_from_slice(
@@ -125,9 +142,9 @@ impl COPRO {
         buffer.extend_from_slice(self.config.breadth.to_string().as_bytes());
         buffer.extend_from_slice(b":\n");
 
-        let prompt = unsafe { StrView::from_raw_parts(buffer.as_ptr(), buffer.len()) };
-        let output = lm.generate(prompt).await?;
-        let text = output.text()?.as_str();
+        let prompt = std::str::from_utf8(buffer).unwrap_or("");
+        let output = lm.generate(prompt, "", None).await?;
+        let text = &output.text;
 
         // Parse numbered instructions
         let mut candidates = Vec::with_capacity(self.config.breadth as usize);
@@ -161,28 +178,60 @@ impl COPRO {
         Ok(candidates)
     }
 
-    /// Evaluate an instruction candidate.
-    pub fn evaluate_instruction<'a>(&self, _instruction: &str, _trainset: &ExampleSet<'a>) -> f64 {
-        // Simplified evaluation - in full impl would run predictions
-        // and compute metrics
-        0.5
+    /// Evaluate an instruction candidate on the trainset using the Evaluate harness.
+    ///
+    /// Runs the LLM with the given instruction on the trainset and returns
+    /// the mean metric score.
+    async fn evaluate_instruction_real<'a, L, M>(
+        &self,
+        instruction: &str,
+        trainset: &ExampleSet<'_>,
+        llm: &'a L,
+        metric: &M,
+        output_field: Option<Sym>,
+    ) -> f64
+    where
+        L: Llm,
+        M: Metric,
+    {
+        let eval = Evaluate::new(llm, metric).instruction(instruction);
+
+        let eval = if let Some(out_sym) = output_field {
+            eval.output_field(out_sym)
+        } else {
+            eval
+        };
+
+        let result = eval.run_async(trainset).await;
+        result.mean
     }
 
-    /// Run COPRO optimization with an LM.
-    pub async fn optimize_with_lm<'a, L>(
+    /// Run COPRO optimization with an LM and metric.
+    ///
+    /// This is the primary entry point. For each depth iteration, generates
+    /// `breadth` candidate instructions, evaluates each on the trainset
+    /// with real LLM calls + metric scoring, and keeps the best.
+    ///
+    /// Returns a [`COPROResult`] with the best instruction and its score.
+    pub async fn optimize_with_lm<'a, L, M>(
         &self,
         base_instruction: &str,
         task_description: &str,
-        trainset: &ExampleSet<'a>,
+        trainset: &ExampleSet<'_>,
         lm: &'a L,
+        metric: &M,
         buffer: &'a mut Vec<u8>,
+        output_field: Option<Sym>,
     ) -> Result<COPROResult>
     where
-        L: LMClient,
+        L: Llm,
+        M: Metric,
     {
         let mut best_instruction = base_instruction.to_string();
-        let mut best_score = self.evaluate_instruction(&best_instruction, trainset);
-        let mut total_candidates = 0u16;
+        let mut best_score = self
+            .evaluate_instruction_real(&best_instruction, trainset, lm, metric, output_field)
+            .await;
+        let mut total_candidates = 1u16; // count the base instruction
 
         for _depth in 0..self.config.depth {
             // Generate candidates based on current best
@@ -192,9 +241,11 @@ impl COPRO {
 
             total_candidates += candidates.len() as u16;
 
-            // Evaluate each candidate
+            // Evaluate each candidate on the trainset
             for candidate in candidates {
-                let score = self.evaluate_instruction(&candidate, trainset);
+                let score = self
+                    .evaluate_instruction_real(&candidate, trainset, lm, metric, output_field)
+                    .await;
                 if score > best_score {
                     best_score = score;
                     best_instruction = candidate;
@@ -208,6 +259,51 @@ impl COPRO {
             candidates_evaluated: total_candidates,
             depth_iterations: self.config.depth,
         })
+    }
+
+    /// Run COPRO and return a [`CompiledProgram`].
+    ///
+    /// Convenience wrapper that calls [`optimize_with_lm`](Self::optimize_with_lm)
+    /// and packages the result into a persistable `CompiledProgram`.
+    pub async fn compile<'a, L, M>(
+        &self,
+        base_instruction: &str,
+        task_description: &str,
+        trainset: &ExampleSet<'_>,
+        lm: &'a L,
+        metric: &M,
+        buffer: &'a mut Vec<u8>,
+        output_field: Option<Sym>,
+    ) -> Result<CompiledProgram>
+    where
+        L: Llm,
+        M: Metric,
+    {
+        let result = self
+            .optimize_with_lm(
+                base_instruction,
+                task_description,
+                trainset,
+                lm,
+                metric,
+                buffer,
+                output_field,
+            )
+            .await?;
+
+        Ok(CompiledProgram::new(
+            result.instruction,
+            SmallVec::new(), // COPRO optimizes instructions, not demos
+            result.score,
+            "COPRO".to_string(),
+        )
+        .with_meta("breadth", self.config.breadth.to_string())
+        .with_meta("depth", self.config.depth.to_string())
+        .with_meta(
+            "candidates_evaluated",
+            result.candidates_evaluated.to_string(),
+        )
+        .with_meta("metric", metric.name().to_string()))
     }
 }
 
@@ -249,28 +345,69 @@ impl Optimizer for COPRO {
 mod tests {
     use super::*;
     use crate::buffer::Buffer;
-    use crate::predict::LMOutput;
+    use crate::intern::sym;
+    use crate::metric::ExactMatch;
+    use crate::optimizer::ExampleMeta;
+    use crate::predict::FieldRange;
+    use crate::recursive::llm::MockLlm;
 
-    struct MockLM;
+    fn mock_instruction_lm() -> MockLlm<impl Fn(&str, Option<&str>) -> String + Send + Sync> {
+        MockLlm::new(|prompt, _feedback| {
+            if prompt.contains("Generate") {
+                // Instruction generation prompt
+                "1. Analyze the question carefully and provide a detailed answer.\n\
+                 2. Think step by step to answer the question.\n\
+                 3. Consider all aspects before responding.\n"
+                    .to_string()
+            } else {
+                // Evaluation prompt - return the expected answer for known inputs
+                if prompt.contains("2+2") {
+                    "4".to_string()
+                } else if prompt.contains("3+3") {
+                    "6".to_string()
+                } else {
+                    "unknown".to_string()
+                }
+            }
+        })
+    }
 
-    impl LMClient for MockLM {
-        type GenerateFut<'a>
-            = std::future::Ready<Result<LMOutput<'a>>>
-        where
-            Self: 'a;
+    /// Helper to build a simple dataset from (input, expected) pairs.
+    fn build_dataset(pairs: &[(&str, &str)]) -> (Buffer, Vec<ExampleMeta>, Sym, Sym) {
+        let input_sym = sym("question");
+        let output_sym = sym("answer");
 
-        fn generate<'a>(&'a self, _prompt: StrView<'a>) -> Self::GenerateFut<'a> {
-            static BUFFER: Buffer = Buffer::Static(
-                b"1. Analyze the question carefully and provide a detailed answer.\n\
-                  2. Think step by step to answer the question.\n\
-                  3. Consider all aspects before responding.\n",
-            );
-            std::future::ready(Ok(LMOutput {
-                buffer: BUFFER.view_all(),
-                prompt_tokens: 50,
-                completion_tokens: 30,
-            }))
+        let mut buf = Vec::new();
+        let mut metas = Vec::new();
+
+        for (input, expected) in pairs {
+            let input_start = buf.len() as u32;
+            buf.extend_from_slice(input.as_bytes());
+            let input_end = buf.len() as u32;
+
+            let output_start = buf.len() as u32;
+            buf.extend_from_slice(expected.as_bytes());
+            let output_end = buf.len() as u32;
+
+            let meta = ExampleMeta {
+                input_ranges: [
+                    (input_sym, FieldRange::new(input_start, input_end)),
+                    (Sym::EMPTY, FieldRange::new(0, 0)),
+                    (Sym::EMPTY, FieldRange::new(0, 0)),
+                    (Sym::EMPTY, FieldRange::new(0, 0)),
+                ],
+                input_count: 1,
+                output_ranges: [
+                    (output_sym, FieldRange::new(output_start, output_end)),
+                    (Sym::EMPTY, FieldRange::new(0, 0)),
+                ],
+                output_count: 1,
+            };
+            metas.push(meta);
         }
+
+        let buffer = Buffer::from_bytes(buf);
+        (buffer, metas, input_sym, output_sym)
     }
 
     #[test]
@@ -290,8 +427,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_candidates() {
+        let lm = mock_instruction_lm();
         let copro = COPRO::default();
-        let lm = MockLM;
         let mut buffer = Vec::new();
 
         let candidates = copro
@@ -301,5 +438,64 @@ mod tests {
         assert!(candidates.is_ok());
         let candidates = candidates.unwrap();
         assert!(!candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_optimize_with_lm_evaluates_on_trainset() {
+        let lm = mock_instruction_lm();
+        let copro = COPRO::new(COPROConfig::new().with_breadth(3).with_depth(1));
+        let mut buffer = Vec::new();
+
+        let (buf, metas, _input_sym, output_sym) =
+            build_dataset(&[("What is 2+2?", "4"), ("What is 3+3?", "6")]);
+
+        let dataset = ExampleSet::new(&buf, &metas);
+
+        let result = copro
+            .optimize_with_lm(
+                "Answer the question.",
+                "Math QA",
+                &dataset,
+                &lm,
+                &ExactMatch,
+                &mut buffer,
+                Some(output_sym),
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(!result.instruction.is_empty());
+        assert!(result.candidates_evaluated >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_compile_returns_compiled_program() {
+        let lm = mock_instruction_lm();
+        let copro = COPRO::new(COPROConfig::new().with_breadth(2).with_depth(1));
+        let mut buffer = Vec::new();
+
+        let (buf, metas, _input_sym, output_sym) =
+            build_dataset(&[("What is 2+2?", "4")]);
+
+        let dataset = ExampleSet::new(&buf, &metas);
+
+        let program = copro
+            .compile(
+                "Answer the question.",
+                "Math QA",
+                &dataset,
+                &lm,
+                &ExactMatch,
+                &mut buffer,
+                Some(output_sym),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(program.optimizer, "COPRO");
+        assert!(program.metadata.contains_key("metric"));
+        assert!(program.metadata.contains_key("breadth"));
+        assert!(program.metadata.contains_key("depth"));
     }
 }

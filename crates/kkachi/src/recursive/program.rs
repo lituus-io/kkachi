@@ -25,8 +25,10 @@
 //! }
 //! ```
 
+use crate::recursive::defaults::Defaults;
 use crate::recursive::executor::CodeExecutor;
 use crate::recursive::llm::Llm;
+use crate::recursive::skill::Skill;
 use crate::recursive::validate::{NoValidation, Validate};
 
 /// Entry point for Program of Thought.
@@ -60,6 +62,10 @@ pub struct ProgramConfig {
     pub language: String,
     /// Extract code blocks from execution output before validation.
     pub extract_lang: Option<String>,
+    /// Runtime defaults applied via regex substitution before validation.
+    pub defaults: Option<Defaults>,
+    /// Pre-rendered skill instructions (injected at the start of prompt).
+    pub skill_text: Option<String>,
 }
 
 impl Default for ProgramConfig {
@@ -69,6 +75,8 @@ impl Default for ProgramConfig {
             include_code: true,
             language: "python".to_string(),
             extract_lang: None,
+            defaults: None,
+            skill_text: None,
         }
     }
 }
@@ -81,7 +89,8 @@ pub struct Program<'a, L: Llm, V: Validate> {
     problem: &'a str,
     executor: Option<Box<dyn CodeExecutor + Send + Sync + 'static>>,
     validator: V,
-    config: ProgramConfig,
+    /// Configuration for Program of Thought.
+    pub config: ProgramConfig,
 }
 
 impl<'a, L: Llm> Program<'a, L, NoValidation> {
@@ -142,6 +151,27 @@ impl<'a, L: Llm, V: Validate> Program<'a, L, V> {
     /// the extracted code.
     pub fn extract(mut self, lang: impl Into<String>) -> Self {
         self.config.extract_lang = Some(lang.into());
+        self
+    }
+
+    /// Attach a skill (persistent prompt context) to this builder.
+    ///
+    /// Skill instructions are prepended to the code generation prompt.
+    pub fn skill(mut self, skill: &Skill<'_>) -> Self {
+        let rendered = skill.render();
+        if rendered.is_empty() {
+            self.config.skill_text = None;
+        } else {
+            self.config.skill_text = Some(rendered);
+        }
+        self
+    }
+
+    /// Set runtime defaults applied via regex substitution before validation.
+    ///
+    /// Defaults are applied to the execution output before validation.
+    pub fn defaults(mut self, defaults: Defaults) -> Self {
+        self.config.defaults = Some(defaults);
         self
     }
 
@@ -217,8 +247,12 @@ impl<'a, L: Llm, V: Validate> Program<'a, L, V> {
                 } else {
                     result.stdout.trim().to_string()
                 };
+                let output_text = match self.config.defaults {
+                    Some(ref d) => d.apply(&output_text),
+                    None => output_text,
+                };
 
-                // Validate the (possibly extracted) output
+                // Validate the (possibly extracted, possibly defaults-applied) output
                 let score = self.validator.validate(&output_text);
 
                 if score.value >= 1.0 || attempt == max_iter - 1 {
@@ -261,10 +295,15 @@ impl<'a, L: Llm, V: Validate> Program<'a, L, V> {
 
     /// Build the prompt for code generation.
     fn build_prompt(&self, previous_error: Option<&str>) -> String {
-        let mut prompt = format!(
+        let mut prompt = String::new();
+        if let Some(ref skill_text) = self.config.skill_text {
+            prompt.push_str(skill_text);
+            prompt.push('\n');
+        }
+        prompt.push_str(&format!(
             "Write {} code to solve the following problem:\n\n{}\n\n",
             self.config.language, self.problem
-        );
+        ));
 
         if let Some(error) = previous_error {
             prompt.push_str(&format!(
@@ -456,5 +495,48 @@ mod tests {
 
         assert!(result.is_success());
         assert_eq!(result.code(), "print(42)");
+    }
+
+    #[test]
+    fn test_program_with_skill() {
+        use crate::recursive::skill::Skill;
+
+        let llm = MockLlm::new(|prompt, _| {
+            if prompt.contains("deletionProtection") {
+                "```bash\necho skill_applied\n```".to_string()
+            } else {
+                "```bash\necho no_skill\n```".to_string()
+            }
+        });
+
+        let skill = Skill::new()
+            .instruct("deletionProtection", "Always set deletionProtection: false.");
+
+        let result = program(&llm, "Generate config")
+            .executor(bash_executor())
+            .skill(&skill)
+            .go();
+
+        assert!(result.success);
+        assert!(result.output.contains("skill_applied"));
+    }
+
+    #[test]
+    fn test_program_with_defaults() {
+        use crate::recursive::defaults::Defaults;
+
+        let llm = MockLlm::new(|_, _| "```bash\necho admin@example.com\n```".to_string());
+
+        let defaults =
+            Defaults::new().set("email", r"admin@example\.com", "real@company.com");
+
+        let result = program(&llm, "Generate IAM")
+            .executor(bash_executor())
+            .defaults(defaults)
+            .go();
+
+        assert!(result.success);
+        assert!(result.output.contains("real@company.com"));
+        assert!(!result.output.contains("admin@example.com"));
     }
 }

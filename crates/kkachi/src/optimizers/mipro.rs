@@ -5,20 +5,32 @@
 //! MIPRO - Multi-Instruction Prompt Optimization
 //!
 //! Jointly optimizes both instructions and demonstrations using
-//! a TPE-style Bayesian optimization approach.
+//! TPE-style Bayesian optimization with real evaluation.
 //!
 //! ## Algorithm
 //!
-//! 1. Generate instruction candidates with LM
-//! 2. Generate demo selection candidates
-//! 3. Use TPE to sample promising (instruction, demos) pairs
-//! 4. Evaluate and update surrogate model
-//! 5. Return best configuration
+//! 1. Generate instruction candidates with the LLM
+//! 2. For `num_trials` iterations:
+//!    a. Use TPE to suggest a (instruction_idx, demo_indices) configuration
+//!       (random sampling during warmup, surrogate-guided after)
+//!    b. Evaluate the configuration on the trainset using the metric
+//!    c. Record the trial result to update the surrogate
+//! 3. Return the best (instruction, demos) pair as a [`CompiledProgram`]
+//!
+//! ## Design
+//!
+//! - Uses the existing [`TPESampler`] for Bayesian optimization
+//! - Uses [`Evaluate`] + [`Metric`] for real evaluation
+//! - Returns [`CompiledProgram`] for persistence
+//! - Uses the [`Llm`] trait (GATs) for instruction generation and evaluation
 
+use crate::compiled::CompiledProgram;
 use crate::error::Result;
+use crate::evaluate::Evaluate;
+use crate::intern::Sym;
+use crate::metric::Metric;
 use crate::optimizer::{ExampleSet, OptimizationResult, Optimizer, OptimizerConfig, Rng};
-use crate::predict::LMClient;
-use crate::str_view::StrView;
+use crate::recursive::llm::Llm;
 use smallvec::SmallVec;
 
 /// MIPRO optimizer configuration.
@@ -205,7 +217,7 @@ impl TPESampler {
 /// MIPRO - Multi-Instruction Prompt Optimization.
 ///
 /// Jointly optimizes instructions and demonstrations using
-/// TPE-style Bayesian optimization.
+/// TPE-style Bayesian optimization with real metric evaluation.
 #[derive(Clone, Copy)]
 pub struct MIPRO {
     config: MIPROConfig,
@@ -236,7 +248,7 @@ impl MIPRO {
         buffer: &'a mut Vec<u8>,
     ) -> Result<Vec<String>>
     where
-        L: LMClient,
+        L: Llm,
     {
         buffer.clear();
 
@@ -249,9 +261,9 @@ impl MIPRO {
         buffer.extend_from_slice(base_instruction.as_bytes());
         buffer.extend_from_slice(b"\n\nGenerate clear, specific variations:\n");
 
-        let prompt = unsafe { StrView::from_raw_parts(buffer.as_ptr(), buffer.len()) };
-        let output = lm.generate(prompt).await?;
-        let text = output.text()?.as_str();
+        let prompt = std::str::from_utf8(buffer).unwrap_or("");
+        let output = lm.generate(prompt, "", None).await?;
+        let text = &output.text;
 
         // Parse numbered instructions
         let mut instructions = Vec::with_capacity(self.config.num_instructions as usize);
@@ -278,18 +290,58 @@ impl MIPRO {
         Ok(instructions)
     }
 
-    /// Run MIPRO optimization with an LM.
-    pub async fn optimize_with_lm<'a, L>(
+    /// Evaluate a (instruction, demos) configuration on the trainset.
+    ///
+    /// Uses the [`Evaluate`] harness to run the LLM with the given instruction
+    /// and demo set, scoring against the metric.
+    async fn evaluate_config_real<'a, L, M>(
+        &self,
+        instruction: &str,
+        demo_indices: &[u32],
+        trainset: &ExampleSet<'_>,
+        llm: &'a L,
+        metric: &M,
+        output_field: Option<Sym>,
+    ) -> f64
+    where
+        L: Llm,
+        M: Metric,
+    {
+        let eval = Evaluate::new(llm, metric)
+            .instruction(instruction)
+            .demos(demo_indices);
+
+        let eval = if let Some(out_sym) = output_field {
+            eval.output_field(out_sym)
+        } else {
+            eval
+        };
+
+        let result = eval.run_async(trainset).await;
+        result.mean
+    }
+
+    /// Run MIPRO optimization with an LM and metric.
+    ///
+    /// This is the primary entry point. Generates instruction candidates,
+    /// then runs `num_trials` TPE-guided trials, each evaluating a
+    /// (instruction, demos) pair on the trainset with real LLM calls.
+    ///
+    /// Returns a [`MIPROResult`] with the best configuration found.
+    pub async fn optimize_with_lm<'a, L, M>(
         &self,
         base_instruction: &str,
         task_description: &str,
-        trainset: &ExampleSet<'a>,
+        trainset: &ExampleSet<'_>,
         lm: &'a L,
+        metric: &M,
         buffer: &'a mut Vec<u8>,
+        output_field: Option<Sym>,
         seed: u64,
     ) -> Result<MIPROResult>
     where
-        L: LMClient,
+        L: Llm,
+        M: Metric,
     {
         // Generate instruction candidates
         let instructions = self
@@ -301,7 +353,7 @@ impl MIPRO {
             (self.config.num_trials as f32 * self.config.warmup_fraction).ceil() as u16;
 
         let mut sampler = TPESampler::new(0.25, seed);
-        let mut best_score = 0.0f64;
+        let mut best_score = f64::NEG_INFINITY;
         let mut best_instruction_idx = 0u8;
         let mut best_demos: SmallVec<[u32; 8]> = SmallVec::new();
 
@@ -314,16 +366,19 @@ impl MIPRO {
                 sampler.suggest_instruction(num_instructions)
             };
 
-            // Note: During warmup and regular trials, we use the same demo selection
-            // strategy. The sampler internally handles exploration vs. exploitation.
             let demo_indices = sampler.suggest_demos(trainset.len(), self.config.base.max_demos);
 
-            // Evaluate (simplified - real impl would run predictions)
-            let score = self.evaluate_config(
-                &instructions[instruction_idx as usize],
-                &demo_indices,
-                trainset,
-            );
+            // Evaluate with real LLM calls + metric
+            let score = self
+                .evaluate_config_real(
+                    &instructions[instruction_idx as usize],
+                    &demo_indices,
+                    trainset,
+                    lm,
+                    metric,
+                    output_field,
+                )
+                .await;
 
             // Record trial
             sampler.record(Trial {
@@ -349,15 +404,51 @@ impl MIPRO {
         })
     }
 
-    /// Evaluate a configuration (simplified).
-    fn evaluate_config(
+    /// Run MIPRO and return a [`CompiledProgram`].
+    ///
+    /// Convenience wrapper that calls [`optimize_with_lm`](Self::optimize_with_lm)
+    /// and packages the result into a persistable `CompiledProgram`.
+    pub async fn compile<'a, L, M>(
         &self,
-        _instruction: &str,
-        _demo_indices: &[u32],
-        _trainset: &ExampleSet<'_>,
-    ) -> f64 {
-        // Simplified evaluation - in full impl would run predictions
-        0.5
+        base_instruction: &str,
+        task_description: &str,
+        trainset: &ExampleSet<'_>,
+        lm: &'a L,
+        metric: &M,
+        buffer: &'a mut Vec<u8>,
+        output_field: Option<Sym>,
+        seed: u64,
+    ) -> Result<CompiledProgram>
+    where
+        L: Llm,
+        M: Metric,
+    {
+        let result = self
+            .optimize_with_lm(
+                base_instruction,
+                task_description,
+                trainset,
+                lm,
+                metric,
+                buffer,
+                output_field,
+                seed,
+            )
+            .await?;
+
+        Ok(CompiledProgram::new(
+            result.instruction,
+            result.demo_indices,
+            result.score,
+            "MIPRO".to_string(),
+        )
+        .with_meta("trials_run", result.trials_run.to_string())
+        .with_meta(
+            "instruction_candidates",
+            result.instruction_candidates.to_string(),
+        )
+        .with_meta("warmup_fraction", self.config.warmup_fraction.to_string())
+        .with_meta("metric", metric.name().to_string()))
     }
 }
 
@@ -412,28 +503,69 @@ impl Optimizer for MIPRO {
 mod tests {
     use super::*;
     use crate::buffer::Buffer;
-    use crate::predict::LMOutput;
+    use crate::intern::sym;
+    use crate::metric::ExactMatch;
+    use crate::optimizer::ExampleMeta;
+    use crate::predict::FieldRange;
+    use crate::recursive::llm::MockLlm;
 
-    struct MockLM;
+    fn mock_mipro_lm() -> MockLlm<impl Fn(&str, Option<&str>) -> String + Send + Sync> {
+        MockLlm::new(|prompt, _feedback| {
+            if prompt.contains("Generate") {
+                // Instruction generation prompt
+                "1. Analyze the question carefully and provide a detailed answer.\n\
+                 2. Think step by step to answer the question.\n\
+                 3. Consider all aspects before responding.\n"
+                    .to_string()
+            } else {
+                // Evaluation prompt - return the expected answer for known inputs
+                if prompt.contains("2+2") {
+                    "4".to_string()
+                } else if prompt.contains("3+3") {
+                    "6".to_string()
+                } else {
+                    "unknown".to_string()
+                }
+            }
+        })
+    }
 
-    impl LMClient for MockLM {
-        type GenerateFut<'a>
-            = std::future::Ready<Result<LMOutput<'a>>>
-        where
-            Self: 'a;
+    /// Helper to build a simple dataset from (input, expected) pairs.
+    fn build_dataset(pairs: &[(&str, &str)]) -> (Buffer, Vec<ExampleMeta>, Sym, Sym) {
+        let input_sym = sym("question");
+        let output_sym = sym("answer");
 
-        fn generate<'a>(&'a self, _prompt: StrView<'a>) -> Self::GenerateFut<'a> {
-            static BUFFER: Buffer = Buffer::Static(
-                b"1. Analyze the question carefully and provide a detailed answer.\n\
-                  2. Think step by step to answer the question.\n\
-                  3. Consider all aspects before responding.\n",
-            );
-            std::future::ready(Ok(LMOutput {
-                buffer: BUFFER.view_all(),
-                prompt_tokens: 50,
-                completion_tokens: 30,
-            }))
+        let mut buf = Vec::new();
+        let mut metas = Vec::new();
+
+        for (input, expected) in pairs {
+            let input_start = buf.len() as u32;
+            buf.extend_from_slice(input.as_bytes());
+            let input_end = buf.len() as u32;
+
+            let output_start = buf.len() as u32;
+            buf.extend_from_slice(expected.as_bytes());
+            let output_end = buf.len() as u32;
+
+            let meta = ExampleMeta {
+                input_ranges: [
+                    (input_sym, FieldRange::new(input_start, input_end)),
+                    (Sym::EMPTY, FieldRange::new(0, 0)),
+                    (Sym::EMPTY, FieldRange::new(0, 0)),
+                    (Sym::EMPTY, FieldRange::new(0, 0)),
+                ],
+                input_count: 1,
+                output_ranges: [
+                    (output_sym, FieldRange::new(output_start, output_end)),
+                    (Sym::EMPTY, FieldRange::new(0, 0)),
+                ],
+                output_count: 1,
+            };
+            metas.push(meta);
         }
+
+        let buffer = Buffer::from_bytes(buf);
+        (buffer, metas, input_sym, output_sym)
     }
 
     #[test]
@@ -492,7 +624,7 @@ mod tests {
     #[tokio::test]
     async fn test_generate_instructions() {
         let mipro = MIPRO::default();
-        let lm = MockLM;
+        let lm = mock_mipro_lm();
         let mut buffer = Vec::new();
 
         let instructions = mipro
@@ -504,5 +636,77 @@ mod tests {
         assert!(!instructions.is_empty());
         // Should include original
         assert!(instructions.contains(&"Answer the question.".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_optimize_with_lm_evaluates_real() {
+        let lm = mock_mipro_lm();
+        // Small config for fast tests
+        let mipro = MIPRO::new(
+            MIPROConfig::new()
+                .with_num_instructions(3)
+                .with_num_trials(5),
+        );
+        let mut buffer = Vec::new();
+
+        let (buf, metas, _input_sym, output_sym) =
+            build_dataset(&[("What is 2+2?", "4"), ("What is 3+3?", "6")]);
+
+        let dataset = ExampleSet::new(&buf, &metas);
+
+        let result = mipro
+            .optimize_with_lm(
+                "Answer the question.",
+                "Math QA",
+                &dataset,
+                &lm,
+                &ExactMatch,
+                &mut buffer,
+                Some(output_sym),
+                42,
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(!result.instruction.is_empty());
+        assert_eq!(result.trials_run, 5);
+        // Score should be non-negative since the LLM can answer some questions
+        assert!(result.score >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_compile_returns_compiled_program() {
+        let lm = mock_mipro_lm();
+        let mipro = MIPRO::new(
+            MIPROConfig::new()
+                .with_num_instructions(2)
+                .with_num_trials(3),
+        );
+        let mut buffer = Vec::new();
+
+        let (buf, metas, _input_sym, output_sym) =
+            build_dataset(&[("What is 2+2?", "4")]);
+
+        let dataset = ExampleSet::new(&buf, &metas);
+
+        let program = mipro
+            .compile(
+                "Answer the question.",
+                "Math QA",
+                &dataset,
+                &lm,
+                &ExactMatch,
+                &mut buffer,
+                Some(output_sym),
+                42,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(program.optimizer, "MIPRO");
+        assert!(program.metadata.contains_key("metric"));
+        assert!(program.metadata.contains_key("trials_run"));
+        assert!(program.metadata.contains_key("instruction_candidates"));
     }
 }

@@ -5,39 +5,18 @@
 //! Validator composition for Python bindings.
 //!
 //! Provides `and()`/`or()`/`all()`/`any()` composition of validators using
-//! `Box<dyn Validate>` for runtime polymorphism at the Python boundary.
+//! `Box<dyn Validate>` directly for runtime polymorphism at the Python boundary.
 //!
 //! The `ValidatorNode` enum stores validator configurations as a tree,
 //! materialized into `Box<dyn Validate>` at execution time.
+//!
+//! v0.4.0: Removed `DynValidator` wrapper — `Box<dyn Validate>` already
+//! satisfies `Send + Sync` (the trait requires it).
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
 use kkachi::recursive::{All, And, Any, Checks, Or, Score, Validate};
-
-// ============================================================================
-// DynValidator — Bridge type for dynamic dispatch at the Python boundary
-// ============================================================================
-
-/// Bridge type wrapping `Box<dyn Validate>`.
-///
-/// Only used in the Python binding layer where dynamic typing is unavoidable.
-/// Python call overhead already dwarfs vtable cost.
-pub(crate) struct DynValidator(pub Box<dyn Validate>);
-
-impl Validate for DynValidator {
-    fn validate(&self, text: &str) -> Score<'static> {
-        self.0.validate(text)
-    }
-
-    fn name(&self) -> &'static str {
-        self.0.name()
-    }
-}
-
-// Safety: The inner Box<dyn Validate> is already Send + Sync (trait bound).
-unsafe impl Send for DynValidator {}
-unsafe impl Sync for DynValidator {}
 
 // ============================================================================
 // ValidatorNode — Tree representation of composed validators
@@ -72,27 +51,23 @@ impl ValidatorNode {
             Self::Semantic(cfg) => cfg.materialize(py),
             Self::Cli(cli) => Box::new(cli.clone()),
             Self::And(a, b) => {
-                let va = DynValidator(a.materialize(py));
-                let vb = DynValidator(b.materialize(py));
+                let va = a.materialize(py);
+                let vb = b.materialize(py);
                 Box::new(And(va, vb))
             }
             Self::Or(a, b) => {
-                let va = DynValidator(a.materialize(py));
-                let vb = DynValidator(b.materialize(py));
+                let va = a.materialize(py);
+                let vb = b.materialize(py);
                 Box::new(Or(va, vb))
             }
             Self::All(nodes) => {
-                let validators: Vec<DynValidator> = nodes
-                    .iter()
-                    .map(|n| DynValidator(n.materialize(py)))
-                    .collect();
+                let validators: Vec<Box<dyn Validate>> =
+                    nodes.iter().map(|n| n.materialize(py)).collect();
                 Box::new(All(validators))
             }
             Self::Any(nodes) => {
-                let validators: Vec<DynValidator> = nodes
-                    .iter()
-                    .map(|n| DynValidator(n.materialize(py)))
-                    .collect();
+                let validators: Vec<Box<dyn Validate>> =
+                    nodes.iter().map(|n| n.materialize(py)).collect();
                 Box::new(Any(validators))
             }
         }
@@ -213,8 +188,8 @@ impl From<Score<'_>> for PyScoreResult {
 ///
 /// Example:
 /// ```python
-/// strict = checks.and(semantic)   # Both must pass
-/// relaxed = checks.or(semantic)   # At least one passes
+/// strict = checks.and_(semantic)
+/// relaxed = checks.or_(semantic)
 /// combined = Validator.all([checks, semantic])
 /// ```
 #[pyclass(name = "Validator")]
@@ -303,7 +278,7 @@ impl PyValidator {
 
 /// Extract a `ValidatorNode` from a Python object.
 ///
-/// Accepts `Checks`, `Semantic`, or `Validator` instances.
+/// Accepts `Checks`, `Semantic`, `CliValidator`, or `Validator` instances.
 pub(crate) fn extract_validator_node(obj: &Bound<'_, PyAny>) -> PyResult<ValidatorNode> {
     use crate::checks::PyChecks;
     use crate::semantic::PySemantic;

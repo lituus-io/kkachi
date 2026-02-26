@@ -25,7 +25,9 @@
 //!     .go();
 //! ```
 
+use crate::recursive::defaults::Defaults;
 use crate::recursive::llm::Llm;
+use crate::recursive::skill::Skill;
 use crate::recursive::tool::Tool;
 use crate::recursive::validate::Validate;
 use smallvec::SmallVec;
@@ -59,6 +61,10 @@ pub struct AgentConfig {
     pub max_steps: usize,
     /// Whether to include the full trajectory in the result.
     pub include_trajectory: bool,
+    /// Runtime defaults applied via regex substitution on the final answer.
+    pub defaults: Option<Defaults>,
+    /// Pre-rendered skill instructions (injected at the start of prompt).
+    pub skill_text: Option<String>,
 }
 
 impl Default for AgentConfig {
@@ -66,6 +72,8 @@ impl Default for AgentConfig {
         Self {
             max_steps: 10,
             include_trajectory: true,
+            defaults: None,
+            skill_text: None,
         }
     }
 }
@@ -77,7 +85,8 @@ pub struct Agent<'a, L: Llm> {
     llm: &'a L,
     goal: &'a str,
     tools: SmallVec<[&'a dyn Tool; 4]>,
-    config: AgentConfig,
+    /// Configuration for the agent.
+    pub config: AgentConfig,
     validator: Option<Box<dyn Validate + 'a>>,
     on_step: Option<Box<dyn Fn(&Step) + Send + Sync + 'a>>,
 }
@@ -145,6 +154,27 @@ impl<'a, L: Llm> Agent<'a, L> {
         self
     }
 
+    /// Attach a skill (persistent prompt context) to this agent.
+    ///
+    /// Skill instructions are prepended to the goal prompt.
+    pub fn skill(mut self, skill: &Skill<'_>) -> Self {
+        let rendered = skill.render();
+        if rendered.is_empty() {
+            self.config.skill_text = None;
+        } else {
+            self.config.skill_text = Some(rendered);
+        }
+        self
+    }
+
+    /// Set runtime defaults applied via regex substitution on the final answer.
+    ///
+    /// Defaults are applied to the agent's final answer before returning.
+    pub fn defaults(mut self, defaults: Defaults) -> Self {
+        self.config.defaults = Some(defaults);
+        self
+    }
+
     /// Execute the agent synchronously.
     pub fn go(self) -> AgentResult {
         futures::executor::block_on(self.run())
@@ -182,7 +212,13 @@ impl<'a, L: Llm> Agent<'a, L> {
 
             // Parse the response
             match self.parse_response(&output.text) {
-                ParsedResponse::FinalAnswer(answer) => {
+                ParsedResponse::FinalAnswer(raw_answer) => {
+                    // Apply defaults before validation
+                    let answer = match self.config.defaults {
+                        Some(ref d) => d.apply(&raw_answer),
+                        None => raw_answer,
+                    };
+
                     // Validate the answer if a validator is set
                     if let Some(ref validator) = self.validator {
                         let score = validator.validate(&answer);
@@ -309,7 +345,12 @@ impl<'a, L: Llm> Agent<'a, L> {
 
     /// Build the prompt with trajectory.
     fn build_prompt(&self, trajectory: &[Step]) -> String {
-        let mut prompt = format!("Goal: {}\n\n", self.goal);
+        let mut prompt = String::new();
+        if let Some(ref skill_text) = self.config.skill_text {
+            prompt.push_str(skill_text);
+            prompt.push('\n');
+        }
+        prompt.push_str(&format!("Goal: {}\n\n", self.goal));
 
         // Add tool descriptions
         if !self.tools.is_empty() {
@@ -621,5 +662,47 @@ mod tests {
             }
             _ => panic!("Expected Action"),
         }
+    }
+
+    #[test]
+    fn test_agent_with_skill() {
+        use crate::recursive::skill::Skill;
+
+        let llm = MockLlm::new(|prompt, _| {
+            if prompt.contains("deletionProtection") {
+                "I see the instruction.\nFinal Answer: skill applied".to_string()
+            } else {
+                "Final Answer: no skill".to_string()
+            }
+        });
+
+        let skill = Skill::new()
+            .instruct("deletionProtection", "Always set deletionProtection: false.");
+
+        let result = agent(&llm, "Generate config")
+            .skill(&skill)
+            .go();
+
+        assert!(result.success);
+        assert_eq!(result.output, "skill applied");
+    }
+
+    #[test]
+    fn test_agent_with_defaults() {
+        use crate::recursive::defaults::Defaults;
+
+        let llm = MockLlm::new(|_, _| {
+            "Found it.\nFinal Answer: admin@example.com".to_string()
+        });
+
+        let defaults =
+            Defaults::new().set("email", r"admin@example\.com", "real@company.com");
+
+        let result = agent(&llm, "Get email")
+            .defaults(defaults)
+            .go();
+
+        assert!(result.success);
+        assert_eq!(result.output, "real@company.com");
     }
 }

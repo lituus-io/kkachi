@@ -29,8 +29,9 @@ from kkachi._kkachi import (
     RefineBuilder,
     # Result types
     RefineResult,
-    # CLI Validator
+    # CLI Validator & Capture
     CliValidator,
+    CliCapture,
     # Validators & Composition
     Checks,
     Semantic,
@@ -43,9 +44,19 @@ from kkachi._kkachi import (
     # Jinja template system
     JinjaTemplate,
     JinjaFormatter,
+    # Rewrite utilities
+    Rewrite,
+    extract_code,
+    extract_all_code,
+    # Runtime defaults
+    Defaults,
+    DefaultAnnotation,
+    # Skills (persistent prompt context)
+    Skill,
     # Memory / RAG
     Memory,
     Recall,
+    PackageResult,
     # DSPy-style entry point functions
     reason,
     best_of,
@@ -88,8 +99,9 @@ __all__ = [
     "RefineBuilder",
     # Result types
     "RefineResult",
-    # CLI Validator
+    # CLI Validator & Capture
     "CliValidator",
+    "CliCapture",
     # Validators & Composition
     "Checks",
     "Semantic",
@@ -102,9 +114,19 @@ __all__ = [
     # Jinja template system
     "JinjaTemplate",
     "JinjaFormatter",
+    # Rewrite utilities
+    "Rewrite",
+    "extract_code",
+    "extract_all_code",
+    # Runtime defaults
+    "Defaults",
+    "DefaultAnnotation",
+    # Skills (persistent prompt context)
+    "Skill",
     # Memory / RAG
     "Memory",
     "Recall",
+    "PackageResult",
     # DSPy-style entry point functions
     "reason",
     "best_of",

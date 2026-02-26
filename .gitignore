@@ -48,6 +48,9 @@ coverage/
 # ONNX models (downloaded for testing)
 /models/
 
+# Examples (local-only, not pushed to remote)
+/examples/
+
 # Build artifacts
 /dist/
 /pkg/

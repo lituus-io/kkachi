@@ -65,7 +65,9 @@
 //! assert!(result.reasoning().contains("step"));
 //! ```
 
+use crate::recursive::defaults::Defaults;
 use crate::recursive::llm::Llm;
+use crate::recursive::skill::Skill;
 use crate::recursive::validate::{NoValidation, Score, Validate};
 
 /// Entry point for Chain of Thought reasoning.
@@ -102,6 +104,10 @@ pub struct ReasonConfig {
     pub instruction: Option<&'static str>,
     /// Extract code blocks in this language before validation.
     pub extract_lang: Option<String>,
+    /// Runtime defaults applied via regex substitution before validation.
+    pub defaults: Option<Defaults>,
+    /// Pre-rendered skill instructions (injected at the start of prompt).
+    pub skill_text: Option<String>,
 }
 
 impl Default for ReasonConfig {
@@ -113,6 +119,8 @@ impl Default for ReasonConfig {
             target: 1.0,
             instruction: None,
             extract_lang: None,
+            defaults: None,
+            skill_text: None,
         }
     }
 }
@@ -125,7 +133,8 @@ pub struct Reason<'a, L: Llm, V: Validate> {
     llm: &'a L,
     prompt: &'a str,
     validator: V,
-    config: ReasonConfig,
+    /// Configuration for the reasoning chain.
+    pub config: ReasonConfig,
 }
 
 impl<'a, L: Llm> Reason<'a, L, NoValidation> {
@@ -151,6 +160,19 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
             validator,
             config: self.config,
         }
+    }
+
+    /// Attach a skill (persistent prompt context) to this reasoning chain.
+    ///
+    /// Skill instructions are prepended to the prompt before the user's question.
+    pub fn skill(mut self, skill: &Skill<'_>) -> Self {
+        let rendered = skill.render();
+        if rendered.is_empty() {
+            self.config.skill_text = None;
+        } else {
+            self.config.skill_text = Some(rendered);
+        }
+        self
     }
 
     /// Set a custom name for the reasoning field.
@@ -190,6 +212,15 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
     /// When set, the validator receives extracted code instead of the raw answer.
     pub fn extract(mut self, lang: impl Into<String>) -> Self {
         self.config.extract_lang = Some(lang.into());
+        self
+    }
+
+    /// Set runtime defaults applied via regex substitution before validation.
+    ///
+    /// Defaults are applied on every iteration — the LLM may produce different
+    /// placeholder values, and defaults catches them all.
+    pub fn defaults(mut self, defaults: Defaults) -> Self {
+        self.config.defaults = Some(defaults);
         self
     }
 
@@ -259,6 +290,12 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
             } else {
                 answer.clone()
             };
+
+            // Apply runtime defaults (regex substitutions) before validation.
+            if let Some(ref defaults) = self.config.defaults {
+                last_output = defaults.apply(&last_output);
+            }
+
             last_score = self.validator.validate(&last_output);
 
             // Check if we've reached the target
@@ -279,26 +316,47 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
 
     /// Build the Chain of Thought prompt.
     fn build_prompt(&self, feedback: Option<&str>) -> String {
-        let instruction = self
-            .config
-            .instruction
-            .unwrap_or("Let's think step by step.");
+        let mut prompt = String::new();
 
-        let mut prompt = format!("{}\n\n{}", self.prompt, instruction);
+        // Inject skill instructions first (highest priority context)
+        if let Some(ref skill_text) = self.config.skill_text {
+            prompt.push_str(skill_text);
+            prompt.push('\n');
+        }
+
+        prompt.push_str(self.prompt);
+
+        // Only add CoT instructions when reasoning is enabled
+        if self.config.include_reasoning {
+            let instruction = self
+                .config
+                .instruction
+                .unwrap_or("Let's think step by step.");
+            prompt.push_str(&format!("\n\n{}", instruction));
+        }
 
         if let Some(fb) = feedback {
             prompt.push_str(&format!(
-                "\n\nPrevious attempt was incorrect. Feedback: {}\n\nPlease try again, thinking more carefully.",
+                "\n\nPrevious attempt was incorrect. Feedback: {}\n\nPlease try again.",
                 fb
             ));
         }
 
-        prompt.push_str("\n\nAfter your reasoning, provide the final answer after \"Therefore:\" or \"Answer:\".");
+        if self.config.include_reasoning {
+            prompt.push_str("\n\nAfter your reasoning, provide the final answer after \"Therefore:\" or \"Answer:\".");
+        }
+
         prompt
     }
 
     /// Parse the response to extract reasoning and final answer.
     fn parse_response<'b>(&self, response: &'b str) -> (Option<&'b str>, String) {
+        // When reasoning is disabled, treat the entire response as the answer.
+        // This preserves multi-line content (YAML, code blocks, etc.).
+        if !self.config.include_reasoning {
+            return (None, response.trim().to_string());
+        }
+
         // Look for common answer markers
         let answer_markers = [
             "Therefore:",
@@ -312,11 +370,7 @@ impl<'a, L: Llm, V: Validate> Reason<'a, L, V> {
             if let Some(idx) = response.find(marker) {
                 let reasoning = response[..idx].trim();
                 let answer_start = idx + marker.len();
-                let answer = response[answer_start..].trim();
-
-                // Find end of answer (next newline or end of string)
-                let answer_end = answer.find('\n').unwrap_or(answer.len());
-                let answer = answer[..answer_end].trim().to_string();
+                let answer = response[answer_start..].trim().to_string();
 
                 return (
                     if reasoning.is_empty() {
@@ -377,7 +431,9 @@ impl ReasonResult {
 mod tests {
     use super::*;
     use crate::recursive::checks::checks;
+    use crate::recursive::defaults::Defaults;
     use crate::recursive::llm::MockLlm;
+    use crate::recursive::skill::Skill;
 
     #[test]
     fn test_reason_basic() {
@@ -447,12 +503,24 @@ mod tests {
 
     #[test]
     fn test_reason_no_reasoning() {
-        let llm = MockLlm::new(|_, _| "Reasoning here\nAnswer: 42".to_string());
+        let llm = MockLlm::new(|_, _| "42".to_string());
 
         let result = reason(&llm, "Test").no_reasoning().go();
 
         assert!(result.reasoning.is_none());
         assert_eq!(result.output, "42");
+    }
+
+    #[test]
+    fn test_reason_no_reasoning_multiline() {
+        let llm = MockLlm::new(|_, _| "name: test\nruntime: yaml\nresources:\n  foo: bar".to_string());
+
+        let result = reason(&llm, "Generate YAML").no_reasoning().go();
+
+        assert!(result.reasoning.is_none());
+        assert!(result.output.contains("name: test"));
+        assert!(result.output.contains("resources:"));
+        assert!(result.output.contains("foo: bar"));
     }
 
     #[test]
@@ -567,5 +635,94 @@ mod tests {
 
         assert_eq!(result.output, "Simple answer");
         assert!(result.reasoning.is_none());
+    }
+
+    #[test]
+    fn test_reason_with_defaults() {
+        let llm = MockLlm::new(|_, _| "user:admin@example.com".to_string());
+
+        let defaults =
+            Defaults::new().set("email", r"admin@example\.com", "real@company.com");
+
+        let result = reason(&llm, "Generate IAM")
+            .defaults(defaults)
+            .validate(checks().require("real@company.com"))
+            .go();
+
+        assert!(result.success());
+        assert!(result.output.contains("real@company.com"));
+        assert!(!result.output.contains("admin@example.com"));
+    }
+
+    #[test]
+    fn test_reason_with_defaults_multiple_patterns() {
+        let llm = MockLlm::new(|_, _| {
+            "user:admin@example.com in my-gcp-project".to_string()
+        });
+
+        let defaults = Defaults::new()
+            .set("email", r"admin@example\.com", "real@company.com")
+            .set("project", r"my-gcp-project", "prod-123");
+
+        let result = reason(&llm, "Generate config")
+            .defaults(defaults)
+            .validate(
+                checks()
+                    .require("real@company.com")
+                    .require("prod-123"),
+            )
+            .go();
+
+        assert!(result.success());
+        assert!(result.output.contains("real@company.com"));
+        assert!(result.output.contains("prod-123"));
+    }
+
+    #[test]
+    fn test_reason_with_defaults_no_match() {
+        let llm = MockLlm::new(|_, _| "no placeholders here".to_string());
+
+        let defaults =
+            Defaults::new().set("email", r"admin@example\.com", "real@company.com");
+
+        let result = reason(&llm, "Generate text")
+            .defaults(defaults)
+            .go();
+
+        assert_eq!(result.output, "no placeholders here");
+    }
+
+    #[test]
+    fn test_reason_with_skill() {
+        let llm = MockLlm::new(|prompt, _| {
+            if prompt.contains("deletionProtection") {
+                "Answer: skill applied".to_string()
+            } else {
+                "Answer: no skill".to_string()
+            }
+        });
+
+        let skill = Skill::new()
+            .instruct("deletionProtection", "Always set deletionProtection: false.");
+
+        let result = reason(&llm, "Generate config").skill(&skill).go();
+
+        assert_eq!(result.output, "skill applied");
+    }
+
+    #[test]
+    fn test_reason_with_skill_empty_noop() {
+        let llm = MockLlm::new(|prompt, _| {
+            // Empty skill should not add any prefix
+            if prompt.starts_with("Generate") {
+                "Answer: ok".to_string()
+            } else {
+                "Answer: unexpected prefix".to_string()
+            }
+        });
+
+        let skill = Skill::new();
+        let result = reason(&llm, "Generate config").skill(&skill).go();
+        assert_eq!(result.output, "ok");
     }
 }

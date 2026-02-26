@@ -74,6 +74,25 @@ pub mod retry;
 // Multi-objective optimization
 pub mod pareto;
 
+// v0.4.0: LM-as-Critic
+pub mod critic;
+
+// v0.4.0: Multimodal input
+pub mod input;
+
+// v0.4.0: State save/load
+pub mod state;
+
+// v0.4.0: Runtime defaults (regex substitution)
+pub mod defaults;
+
+// v0.5.0: Skills (persistent prompt context)
+pub mod skill;
+
+// v0.5.0: DuckDB RAG auto-packaging
+#[cfg(feature = "storage")]
+pub mod packager;
+
 // DSPy-style modules
 pub mod agent;
 pub mod best_of;
@@ -160,3 +179,16 @@ pub use rate_limit::{RateLimitConfig, RateLimitExt, RateLimitedLlm};
 pub use reason::{reason, Reason, ReasonConfig, ReasonResult};
 pub use retry::{LlmExt, RetryConfig, RetryLlm};
 pub use tool::{tool, AsyncFnTool, FnTool, MockTool, Tool, ToolBuilder};
+
+// Critic re-exports
+pub use critic::{Critic, CriticFeedback, FnCritic, LlmCritic, NoCritic};
+
+// Defaults re-exports
+pub use defaults::{DefaultAnnotation, Defaults};
+
+// Skill re-exports
+pub use skill::Skill;
+
+// Packager re-exports
+#[cfg(feature = "storage")]
+pub use packager::{PackageResult, PackagerBuilder};

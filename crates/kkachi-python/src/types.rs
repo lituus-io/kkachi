@@ -230,6 +230,54 @@ impl PyMemory {
         Ok(self_.into())
     }
 
+    /// Package the persistent memory into a pip-installable wheel.
+    ///
+    /// Args:
+    ///     name (str): Package name (e.g., "my_kb")
+    ///     version (str): Package version (default "0.1.0")
+    ///     output_dir (str): Output directory (default ".")
+    ///     description (str): Package description
+    ///     author (str): Package author
+    ///
+    /// Returns:
+    ///     PackageResult: Details about the generated wheel
+    ///
+    /// Raises:
+    ///     RuntimeError: If memory is not persistent or packaging fails
+    #[cfg(feature = "storage")]
+    #[pyo3(signature = (name, version="0.1.0", output_dir=".", description="Kkachi knowledge base", author=""))]
+    fn package(
+        &self,
+        name: &str,
+        version: &str,
+        output_dir: &str,
+        description: &str,
+        author: &str,
+    ) -> PyResult<PyPackageResult> {
+        use pyo3::exceptions::PyRuntimeError;
+
+        let builder = self
+            .inner
+            .package(name)
+            .map_err(|e| PyRuntimeError::new_err(format!("{}", e)))?;
+
+        let result = builder
+            .version_owned(version.to_string())
+            .output_dir_owned(std::path::PathBuf::from(output_dir))
+            .description_owned(description.to_string())
+            .author_owned(author.to_string())
+            .build()
+            .map_err(|e| PyRuntimeError::new_err(format!("{}", e)))?;
+
+        Ok(PyPackageResult {
+            wheel_path: result.wheel_path.display().to_string(),
+            wheel_name: result.wheel_name,
+            size_bytes: result.size_bytes,
+            db_size_bytes: result.db_size_bytes,
+            file_count: result.file_count,
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!("Memory(len={})", self.inner.len())
     }
@@ -242,5 +290,40 @@ impl PyMemory {
 
     pub fn inner_mut(&mut self) -> &mut Memory {
         &mut self.inner
+    }
+}
+
+/// Result from packaging a Memory into a pip wheel.
+#[pyclass(name = "PackageResult")]
+#[derive(Clone)]
+pub struct PyPackageResult {
+    /// Full path to the generated .whl file.
+    #[pyo3(get)]
+    pub wheel_path: String,
+    /// Wheel filename.
+    #[pyo3(get)]
+    pub wheel_name: String,
+    /// Total size of the wheel file in bytes.
+    #[pyo3(get)]
+    pub size_bytes: u64,
+    /// Size of the embedded .db file in bytes.
+    #[pyo3(get)]
+    pub db_size_bytes: u64,
+    /// Number of files in the wheel.
+    #[pyo3(get)]
+    pub file_count: usize,
+}
+
+#[pymethods]
+impl PyPackageResult {
+    fn __repr__(&self) -> String {
+        format!(
+            "PackageResult(wheel='{}', size={}B, db={}B, files={})",
+            self.wheel_name, self.size_bytes, self.db_size_bytes, self.file_count
+        )
+    }
+
+    fn __str__(&self) -> String {
+        self.wheel_path.clone()
     }
 }

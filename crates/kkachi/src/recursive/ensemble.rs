@@ -21,7 +21,9 @@
 //! assert!(result.output.contains("Paris"));
 //! ```
 
+use crate::recursive::defaults::Defaults;
 use crate::recursive::llm::Llm;
+use crate::recursive::skill::Skill;
 use crate::recursive::validate::{NoValidation, Validate};
 use smallvec::SmallVec;
 use std::collections::HashMap;
@@ -74,6 +76,10 @@ pub struct EnsembleConfig {
     pub extract_lang: Option<String>,
     /// Whether to generate chains in parallel using threads.
     pub parallel: bool,
+    /// Runtime defaults applied via regex substitution before comparison.
+    pub defaults: Option<Defaults>,
+    /// Pre-rendered skill instructions (injected at the start of prompt).
+    pub skill_text: Option<String>,
 }
 
 impl Default for EnsembleConfig {
@@ -85,6 +91,8 @@ impl Default for EnsembleConfig {
             diverse: true,
             extract_lang: None,
             parallel: false,
+            defaults: None,
+            skill_text: None,
         }
     }
 }
@@ -98,7 +106,8 @@ pub struct Ensemble<'a, L: Llm, V: Validate> {
     n: usize,
     validator: V,
     aggregate: Aggregate,
-    config: EnsembleConfig,
+    /// Configuration for ensemble generation.
+    pub config: EnsembleConfig,
 }
 
 impl<'a, L: Llm> Ensemble<'a, L, NoValidation> {
@@ -193,6 +202,28 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
         self
     }
 
+    /// Attach a skill (persistent prompt context) to this builder.
+    ///
+    /// Skill instructions are prepended to the prompt before generation.
+    pub fn skill(mut self, skill: &Skill<'_>) -> Self {
+        let rendered = skill.render();
+        if rendered.is_empty() {
+            self.config.skill_text = None;
+        } else {
+            self.config.skill_text = Some(rendered);
+        }
+        self
+    }
+
+    /// Set runtime defaults applied via regex substitution before comparison.
+    ///
+    /// Defaults are applied to each chain's raw answer before normalization
+    /// and to the final selected output.
+    pub fn defaults(mut self, defaults: Defaults) -> Self {
+        self.config.defaults = Some(defaults);
+        self
+    }
+
     /// Execute synchronously and return the result.
     #[cfg(feature = "native")]
     pub fn go(self) -> EnsembleResult {
@@ -249,10 +280,17 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
         let mut total_tokens = 0u32;
         let mut error: Option<String> = None;
 
-        let prompt = if self.config.with_reasoning {
-            format!("{}\n\nLet's think step by step.", self.prompt)
-        } else {
-            self.prompt.to_string()
+        let prompt = {
+            let mut p = String::new();
+            if let Some(ref s) = self.config.skill_text {
+                p.push_str(s);
+                p.push('\n');
+            }
+            p.push_str(self.prompt);
+            if self.config.with_reasoning {
+                p.push_str("\n\nLet's think step by step.");
+            }
+            p
         };
 
         if self.config.parallel {
@@ -304,6 +342,10 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
                 } else {
                     output.text
                 };
+                let raw_answer = match self.config.defaults {
+                    Some(ref d) => d.apply(&raw_answer),
+                    None => raw_answer,
+                };
 
                 let normalized = if self.config.normalize {
                     Self::normalize_answer(&raw_answer)
@@ -353,6 +395,10 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
                         .unwrap_or(output.text)
                 } else {
                     output.text
+                };
+                let raw_answer = match self.config.defaults {
+                    Some(ref d) => d.apply(&raw_answer),
+                    None => raw_answer,
                 };
 
                 let normalized = if self.config.normalize {
@@ -487,9 +533,14 @@ impl<'a, L: Llm, V: Validate> Ensemble<'a, L, V> {
             "ensemble complete"
         );
 
+        let final_output = match self.config.defaults {
+            Some(ref d) => d.apply(&selected),
+            None => selected,
+        };
+
         (
             EnsembleResult {
-                output: selected,
+                output: final_output,
                 chains_generated: self.n,
                 tokens: total_tokens,
                 agreement_ratio,
@@ -744,5 +795,46 @@ mod tests {
     #[test]
     fn test_aggregate_default() {
         assert_eq!(Aggregate::default(), Aggregate::MajorityVote);
+    }
+
+    #[test]
+    fn test_ensemble_with_skill() {
+        use crate::recursive::skill::Skill;
+
+        let llm = MockLlm::new(|prompt, _| {
+            if prompt.contains("deletionProtection") {
+                "skill applied".to_string()
+            } else {
+                "no skill".to_string()
+            }
+        });
+
+        let skill = Skill::new()
+            .instruct("deletionProtection", "Always set deletionProtection: false.");
+
+        let result = ensemble(&llm, "Generate config")
+            .n(1)
+            .skill(&skill)
+            .go();
+
+        assert!(result.output.contains("skill applied"));
+    }
+
+    #[test]
+    fn test_ensemble_with_defaults() {
+        use crate::recursive::defaults::Defaults;
+
+        let llm = MockLlm::new(|_, _| "user:admin@example.com".to_string());
+
+        let defaults =
+            Defaults::new().set("email", r"admin@example\.com", "real@company.com");
+
+        let result = ensemble(&llm, "Generate IAM")
+            .n(1)
+            .defaults(defaults)
+            .go();
+
+        assert!(result.output.contains("real@company.com"));
+        assert!(!result.output.contains("admin@example.com"));
     }
 }

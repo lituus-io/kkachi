@@ -121,7 +121,10 @@ pub struct Cli {
     use_stdin: bool,
     strip_fences: bool,
     /// Captured outputs (populated during validation).
-    captures: std::sync::Mutex<SmallVec<[CliCapture; 4]>>,
+    /// Wrapped in `Arc` so clones share the same capture store —
+    /// captures written by a composed/cloned validator are visible
+    /// from the original Python object after `reason().go()` completes.
+    captures: std::sync::Arc<std::sync::Mutex<SmallVec<[CliCapture; 4]>>>,
 }
 
 impl Clone for Cli {
@@ -137,8 +140,8 @@ impl Clone for Cli {
             capture: self.capture,
             use_stdin: self.use_stdin,
             strip_fences: self.strip_fences,
-            // Create a new empty mutex for the clone
-            captures: std::sync::Mutex::new(SmallVec::new()),
+            // Share the same capture store across clones
+            captures: self.captures.clone(),
         }
     }
 }
@@ -160,7 +163,7 @@ impl Cli {
             capture: false,
             use_stdin: false,
             strip_fences: false,
-            captures: std::sync::Mutex::new(SmallVec::new()),
+            captures: std::sync::Arc::new(std::sync::Mutex::new(SmallVec::new())),
         }
     }
 
@@ -272,6 +275,80 @@ impl Cli {
     /// Get captured outputs after validation.
     pub fn get_captures(&self) -> SmallVec<[CliCapture; 4]> {
         self.captures.lock().unwrap().clone()
+    }
+
+    // =========================================================================
+    // In-place mutation methods for Python bindings (avoids std::mem::replace)
+    // =========================================================================
+
+    /// Add an argument to the current stage (in-place).
+    pub fn push_arg(&mut self, arg: &str) {
+        if let Some(stage) = self.stages.last_mut() {
+            stage.args.push(arg.to_string());
+        }
+    }
+
+    /// Add multiple arguments to the current stage (in-place).
+    pub fn push_args(&mut self, args: &[&str]) {
+        if let Some(stage) = self.stages.last_mut() {
+            for arg in args {
+                stage.args.push((*arg).to_string());
+            }
+        }
+    }
+
+    /// Set the weight for the current stage (in-place).
+    pub fn set_weight(&mut self, w: f64) {
+        if let Some(stage) = self.stages.last_mut() {
+            stage.weight = w;
+        }
+    }
+
+    /// Mark the current stage as required (in-place).
+    pub fn set_required(&mut self) {
+        if let Some(stage) = self.stages.last_mut() {
+            stage.required = true;
+        }
+    }
+
+    /// Add another command stage to the pipeline (in-place).
+    pub fn push_stage(&mut self, command: &str) {
+        self.stages.push(Stage::new(command));
+    }
+
+    /// Set the file extension (in-place).
+    pub fn set_ext(&mut self, extension: &str) {
+        self.extension = extension.to_string();
+    }
+
+    /// Set an environment variable (in-place).
+    pub fn push_env(&mut self, key: &str, value: &str) {
+        self.env_vars.push((key.to_string(), value.to_string()));
+    }
+
+    /// Inherit an environment variable from the current process (in-place).
+    pub fn push_env_from(&mut self, key: &str) {
+        self.env_passthrough.push(key.to_string());
+    }
+
+    /// Set the working directory (in-place).
+    pub fn set_workdir(&mut self, path: &str) {
+        self.workdir = Some(PathBuf::from(path));
+    }
+
+    /// Set the timeout in seconds (in-place).
+    pub fn set_timeout(&mut self, secs: u64) {
+        self.timeout = Duration::from_secs(secs);
+    }
+
+    /// Enable output capture (in-place).
+    pub fn set_capture(&mut self) {
+        self.capture = true;
+    }
+
+    /// Enable strip-fences mode (in-place).
+    pub fn set_strip_fences(&mut self) {
+        self.strip_fences = true;
     }
 
     /// Execute a single stage.
@@ -420,9 +497,10 @@ impl Validate for Cli {
         // Cleanup temp file
         let _ = std::fs::remove_file(&temp_file);
 
-        // Store captures
+        // Append captures (accumulate across iterations so earlier errors
+        // are preserved for documentation / README generation).
         if self.capture {
-            *self.captures.lock().unwrap() = all_captures;
+            self.captures.lock().unwrap().extend(all_captures);
         }
 
         // Calculate final score

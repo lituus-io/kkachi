@@ -34,6 +34,7 @@ use crate::recursive::llm::{Llm, LmOutput};
 use reqwest::blocking::Client;
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Supported LLM providers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,8 +75,12 @@ pub struct ApiLlm {
     provider: Provider,
     temperature: f64,
     max_tokens: u32,
+    timeout_secs: u64,
     on_token: Option<Arc<dyn Fn(&str) + Send + Sync>>,
 }
+
+/// Default HTTP timeout in seconds (5 minutes).
+const DEFAULT_TIMEOUT_SECS: u64 = 300;
 
 impl ApiLlm {
     /// Auto-detect provider from environment.
@@ -126,7 +131,7 @@ impl ApiLlm {
         base_url: impl Into<String>,
     ) -> Self {
         Self {
-            client: Some(Client::new()),
+            client: Some(Self::build_client(DEFAULT_TIMEOUT_SECS)),
             provider: Provider::Anthropic {
                 api_key: api_key.into(),
                 model: model.into(),
@@ -134,6 +139,7 @@ impl ApiLlm {
             },
             temperature: 0.7,
             max_tokens: 4096,
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
             on_token: None,
         }
     }
@@ -150,7 +156,7 @@ impl ApiLlm {
         base_url: impl Into<String>,
     ) -> Self {
         Self {
-            client: Some(Client::new()),
+            client: Some(Self::build_client(DEFAULT_TIMEOUT_SECS)),
             provider: Provider::OpenAI {
                 api_key: api_key.into(),
                 model: model.into(),
@@ -158,6 +164,7 @@ impl ApiLlm {
             },
             temperature: 0.7,
             max_tokens: 4096,
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
             on_token: None,
         }
     }
@@ -173,8 +180,33 @@ impl ApiLlm {
             provider: Provider::ClaudeCode { path },
             temperature: 0.7,
             max_tokens: 4096,
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
             on_token: None,
         }
+    }
+
+    /// Build an HTTP client with the given timeout.
+    fn build_client(timeout_secs: u64) -> Client {
+        Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .build()
+            .unwrap_or_else(|_| Client::new())
+    }
+
+    /// Set the HTTP request timeout in seconds (default: 300).
+    ///
+    /// Controls how long to wait for an LLM API response before timing out.
+    /// Increase this for large prompts that generate long responses.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let llm = ApiLlm::openai("key", "gpt-4o").timeout(600); // 10 minutes
+    /// ```
+    pub fn timeout(mut self, secs: u64) -> Self {
+        self.timeout_secs = secs;
+        self.client = Some(Self::build_client(secs));
+        self
     }
 
     /// Set the temperature for generation.

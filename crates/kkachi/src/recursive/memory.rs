@@ -416,6 +416,7 @@ enum MemoryStore {
     Persistent {
         conn: Connection,
         dimension: usize,
+        db_path: String,
     },
 }
 
@@ -543,7 +544,11 @@ impl<E: Embedder> Memory<E> {
         ))
         .map_err(|e| Error::storage(e.to_string()))?;
 
-        self.store = MemoryStore::Persistent { conn, dimension };
+        self.store = MemoryStore::Persistent {
+            conn,
+            dimension,
+            db_path: path.to_string(),
+        };
         Ok(self)
     }
 
@@ -651,7 +656,7 @@ impl<E: Embedder> Memory<E> {
         match &self.store {
             MemoryStore::InMemory(store) => store.search(&query_embedding, k),
             #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, dimension } => {
+            MemoryStore::Persistent { conn, dimension, .. } => {
                 // For DuckDB, we need to fetch all and sort in Rust
                 // (DuckDB doesn't have built-in vector similarity)
                 let mut stmt = conn
@@ -723,7 +728,7 @@ impl<E: Embedder> Memory<E> {
                 self.mmr_search_in_memory(store, &query_embedding, k, lambda)
             }
             #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, dimension } => {
+            MemoryStore::Persistent { conn, dimension, .. } => {
                 let query_embedding = self.embedder.embed(query);
                 self.mmr_search_persistent(conn, *dimension, &query_embedding, k, lambda)
             }
@@ -921,6 +926,33 @@ impl<E: Embedder> Memory<E> {
                 let content = format!("Q: {}\nA: {}", question, output);
                 self.add(&content);
             }
+        }
+    }
+
+    /// Get the database path if using persistent storage.
+    #[cfg(feature = "storage")]
+    pub fn db_path(&self) -> Option<&str> {
+        match &self.store {
+            MemoryStore::Persistent { db_path, .. } => Some(db_path.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Create a packager builder for this memory's persistent DB.
+    ///
+    /// Returns an error if the memory is not using persistent storage.
+    #[cfg(feature = "storage")]
+    pub fn package(&self, name: &str) -> Result<crate::recursive::packager::PackagerBuilder<'_>> {
+        match &self.store {
+            MemoryStore::Persistent { db_path, .. } => {
+                Ok(crate::recursive::packager::PackagerBuilder::new(
+                    std::path::Path::new(db_path.as_str()),
+                )
+                .name_owned(name.to_string()))
+            }
+            _ => Err(Error::storage(
+                "Cannot package in-memory store. Call .persist(path) first.",
+            )),
         }
     }
 }

@@ -51,7 +51,8 @@ use kkachi::recursive::{
     Tool,
 };
 
-use crate::compose::{extract_validator_node, DynValidator, ValidatorNode};
+use crate::compose::{extract_validator_node, ValidatorNode};
+use crate::defaults::PyDefaults;
 
 // ============================================================================
 // Python-callable LLM wrapper
@@ -978,6 +979,10 @@ pub struct PyReasonBuilder {
     regex_pattern: Option<String>,
     // Composed validator (overrides inline patterns)
     validator: Option<ValidatorNode>,
+    // Runtime defaults (regex substitutions applied before validation)
+    defaults: Option<PyDefaults>,
+    // Skill (persistent prompt context)
+    skill: Option<crate::skill::PySkill>,
 }
 
 impl Clone for PyReasonBuilder {
@@ -992,6 +997,8 @@ impl Clone for PyReasonBuilder {
             forbid_patterns: self.forbid_patterns.clone(),
             regex_pattern: self.regex_pattern.clone(),
             validator: self.validator.clone(),
+            defaults: self.defaults.clone(),
+            skill: self.skill.clone(),
         })
     }
 }
@@ -1015,6 +1022,8 @@ impl PyReasonBuilder {
             forbid_patterns: Vec::new(),
             regex_pattern: None,
             validator: None,
+            defaults: None,
+            skill: None,
         }
     }
 
@@ -1025,6 +1034,25 @@ impl PyReasonBuilder {
         let mut new = self.clone();
         new.validator = Some(extract_validator_node(validator)?);
         Ok(new)
+    }
+
+    /// Set runtime defaults applied via regex substitution before validation.
+    ///
+    /// Defaults are applied on every iteration — the LLM may produce different
+    /// placeholder values, and defaults catches them all.
+    fn defaults(&self, defaults: PyDefaults) -> Self {
+        let mut new = self.clone();
+        new.defaults = Some(defaults);
+        new
+    }
+
+    /// Attach a Skill (persistent prompt context) to this reasoning chain.
+    ///
+    /// Skill instructions are prepended to the prompt before the user's question.
+    fn skill(&self, skill: crate::skill::PySkill) -> Self {
+        let mut new = self.clone();
+        new.skill = Some(skill);
+        new
     }
 
     /// Set maximum refinement iterations.
@@ -1072,16 +1100,24 @@ impl PyReasonBuilder {
     /// Execute the Chain of Thought reasoning.
     fn go(&self) -> PyResult<PyReasonResult> {
         let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
+        let rust_defaults = self.defaults.as_ref().map(|d| d.inner.clone());
+        let rust_skill_text = self.skill.as_ref().map(|s| s.to_skill().render()).filter(|s| !s.is_empty());
 
         let result = if let Some(ref node) = self.validator {
             // Composed validator takes priority
-            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            let validator = Python::with_gil(|py| node.materialize(py));
             let mut builder = reason(&llm, &self.prompt)
-                .validate(dyn_v)
+                .validate(validator)
                 .max_iter(self.max_iter)
                 .target(self.target);
             if !self.include_reasoning {
                 builder = builder.no_reasoning();
+            }
+            if let Some(defaults) = rust_defaults {
+                builder = builder.defaults(defaults);
+            }
+            if let Some(ref skill_text) = rust_skill_text {
+                builder.config.skill_text = Some(skill_text.clone());
             }
             builder.go()
         } else {
@@ -1107,6 +1143,12 @@ impl PyReasonBuilder {
                 if !self.include_reasoning {
                     builder = builder.no_reasoning();
                 }
+                if let Some(defaults) = rust_defaults {
+                    builder = builder.defaults(defaults);
+                }
+                if let Some(ref skill_text) = rust_skill_text {
+                    builder.config.skill_text = Some(skill_text.clone());
+                }
                 builder.go()
             } else {
                 let mut builder = reason(&llm, &self.prompt)
@@ -1114,6 +1156,12 @@ impl PyReasonBuilder {
                     .target(self.target);
                 if !self.include_reasoning {
                     builder = builder.no_reasoning();
+                }
+                if let Some(defaults) = rust_defaults {
+                    builder = builder.defaults(defaults);
+                }
+                if let Some(ref skill_text) = rust_skill_text {
+                    builder.config.skill_text = Some(skill_text.clone());
                 }
                 builder.go()
             }
@@ -1152,6 +1200,10 @@ pub struct PyBestOfBuilder {
     forbid_patterns: Vec<String>,
     // Composed validator (overrides inline patterns)
     validator: Option<ValidatorNode>,
+    // Runtime defaults (regex substitutions applied before scoring)
+    defaults: Option<PyDefaults>,
+    // Skill (persistent prompt context)
+    skill: Option<crate::skill::PySkill>,
 }
 
 impl Clone for PyBestOfBuilder {
@@ -1166,6 +1218,8 @@ impl Clone for PyBestOfBuilder {
             require_patterns: self.require_patterns.clone(),
             forbid_patterns: self.forbid_patterns.clone(),
             validator: self.validator.clone(),
+            defaults: self.defaults.clone(),
+            skill: self.skill.clone(),
         })
     }
 }
@@ -1190,6 +1244,8 @@ impl PyBestOfBuilder {
             require_patterns: Vec::new(),
             forbid_patterns: Vec::new(),
             validator: None,
+            defaults: None,
+            skill: None,
         }
     }
 
@@ -1198,6 +1254,20 @@ impl PyBestOfBuilder {
         let mut new = self.clone();
         new.validator = Some(extract_validator_node(validator)?);
         Ok(new)
+    }
+
+    /// Set runtime defaults applied via regex substitution before scoring.
+    fn defaults(&self, defaults: PyDefaults) -> Self {
+        let mut new = self.clone();
+        new.defaults = Some(defaults);
+        new
+    }
+
+    /// Attach a Skill (persistent prompt context) to this builder.
+    fn skill(&self, skill: crate::skill::PySkill) -> Self {
+        let mut new = self.clone();
+        new.skill = Some(skill);
+        new
     }
 
     /// Set a custom scoring metric.
@@ -1264,6 +1334,8 @@ impl PyBestOfBuilder {
     fn run_internal(&self) -> PyResult<(PyBestOfResult, PyCandidatePool)> {
         let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
         let scorer_obj = Python::with_gil(|py| self.scorer.as_ref().map(|s| s.clone_ref(py)));
+        let rust_defaults = self.defaults.as_ref().map(|d| d.inner.clone());
+        let rust_skill_text = self.skill.as_ref().map(|s| s.to_skill().render()).filter(|s| !s.is_empty());
 
         // Build scorer closure if provided
         let py_scorer = scorer_obj.map(|scorer_py| {
@@ -1277,28 +1349,42 @@ impl PyBestOfBuilder {
             }
         });
 
+        // Helper macro to set defaults and skill on any BestOf builder
+        macro_rules! apply_config {
+            ($builder:expr) => {{
+                let mut b = $builder;
+                if let Some(ref defaults) = rust_defaults {
+                    b.config.defaults = Some(defaults.clone());
+                }
+                if let Some(ref skill_text) = rust_skill_text {
+                    b.config.skill_text = Some(skill_text.clone());
+                }
+                b
+            }};
+        }
+
         let (result, pool) = if let Some(ref node) = self.validator {
             // Composed validator takes priority
-            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            let validator = Python::with_gil(|py| node.materialize(py));
             if let Some(scorer) = py_scorer {
                 let mut builder = best_of(&llm, &self.prompt)
                     .n(self.n)
-                    .validate(dyn_v)
+                    .validate(validator)
                     .metric(scorer)
                     .scorer_weight(self.scorer_weight);
                 if self.with_reasoning {
                     builder = builder.with_reasoning();
                 }
-                builder.go_with_pool()
+                apply_config!(builder).go_with_pool()
             } else {
                 let mut builder = best_of(&llm, &self.prompt)
                     .n(self.n)
-                    .validate(dyn_v)
+                    .validate(validator)
                     .scorer_weight(self.scorer_weight);
                 if self.with_reasoning {
                     builder = builder.with_reasoning();
                 }
-                builder.go_with_pool()
+                apply_config!(builder).go_with_pool()
             }
         } else {
             let has_inline = !self.require_patterns.is_empty() || !self.forbid_patterns.is_empty();
@@ -1321,7 +1407,7 @@ impl PyBestOfBuilder {
                     if self.with_reasoning {
                         builder = builder.with_reasoning();
                     }
-                    builder.go_with_pool()
+                    apply_config!(builder).go_with_pool()
                 } else {
                     let mut builder = best_of(&llm, &self.prompt)
                         .n(self.n)
@@ -1330,7 +1416,7 @@ impl PyBestOfBuilder {
                     if self.with_reasoning {
                         builder = builder.with_reasoning();
                     }
-                    builder.go_with_pool()
+                    apply_config!(builder).go_with_pool()
                 }
             } else if let Some(scorer) = py_scorer {
                 let mut builder = best_of(&llm, &self.prompt)
@@ -1340,7 +1426,7 @@ impl PyBestOfBuilder {
                 if self.with_reasoning {
                     builder = builder.with_reasoning();
                 }
-                builder.go_with_pool()
+                apply_config!(builder).go_with_pool()
             } else {
                 let mut builder = best_of(&llm, &self.prompt)
                     .n(self.n)
@@ -1348,7 +1434,7 @@ impl PyBestOfBuilder {
                 if self.with_reasoning {
                     builder = builder.with_reasoning();
                 }
-                builder.go_with_pool()
+                apply_config!(builder).go_with_pool()
             }
         };
 
@@ -1387,6 +1473,10 @@ pub struct PyEnsembleBuilder {
     forbid_patterns: Vec<String>,
     // Composed validator
     validator: Option<ValidatorNode>,
+    // Runtime defaults (regex substitutions applied before comparison)
+    defaults: Option<PyDefaults>,
+    // Skill (persistent prompt context)
+    skill: Option<crate::skill::PySkill>,
 }
 
 impl Clone for PyEnsembleBuilder {
@@ -1401,6 +1491,8 @@ impl Clone for PyEnsembleBuilder {
             require_patterns: self.require_patterns.clone(),
             forbid_patterns: self.forbid_patterns.clone(),
             validator: self.validator.clone(),
+            defaults: self.defaults.clone(),
+            skill: self.skill.clone(),
         })
     }
 }
@@ -1425,6 +1517,8 @@ impl PyEnsembleBuilder {
             require_patterns: Vec::new(),
             forbid_patterns: Vec::new(),
             validator: None,
+            defaults: None,
+            skill: None,
         }
     }
 
@@ -1433,6 +1527,20 @@ impl PyEnsembleBuilder {
         let mut new = self.clone();
         new.validator = Some(extract_validator_node(validator)?);
         Ok(new)
+    }
+
+    /// Set runtime defaults applied via regex substitution before comparison.
+    fn defaults(&self, defaults: PyDefaults) -> Self {
+        let mut new = self.clone();
+        new.defaults = Some(defaults);
+        new
+    }
+
+    /// Attach a Skill (persistent prompt context) to this builder.
+    fn skill(&self, skill: crate::skill::PySkill) -> Self {
+        let mut new = self.clone();
+        new.skill = Some(skill);
+        new
     }
 
     /// Set aggregation strategy.
@@ -1505,12 +1613,27 @@ impl PyEnsembleBuilder {
     fn run_internal(&self) -> PyResult<(PyEnsembleResult, PyConsensusPool)> {
         let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
         let aggregate = self.parse_aggregate();
+        let rust_defaults = self.defaults.as_ref().map(|d| d.inner.clone());
+        let rust_skill_text = self.skill.as_ref().map(|s| s.to_skill().render()).filter(|s| !s.is_empty());
+
+        macro_rules! apply_config {
+            ($builder:expr) => {{
+                let mut b = $builder;
+                if let Some(ref defaults) = rust_defaults {
+                    b.config.defaults = Some(defaults.clone());
+                }
+                if let Some(ref skill_text) = rust_skill_text {
+                    b.config.skill_text = Some(skill_text.clone());
+                }
+                b
+            }};
+        }
 
         let (result, consensus) = if let Some(ref node) = self.validator {
-            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            let validator = Python::with_gil(|py| node.materialize(py));
             let mut builder = ensemble(&llm, &self.prompt)
                 .n(self.n)
-                .validate(dyn_v)
+                .validate(validator)
                 .aggregate(aggregate);
             if self.with_reasoning {
                 builder = builder.with_reasoning();
@@ -1518,7 +1641,7 @@ impl PyEnsembleBuilder {
             if !self.normalize {
                 builder = builder.no_normalize();
             }
-            builder.go_with_consensus()
+            apply_config!(builder).go_with_consensus()
         } else {
             let has_inline = !self.require_patterns.is_empty() || !self.forbid_patterns.is_empty();
 
@@ -1540,7 +1663,7 @@ impl PyEnsembleBuilder {
                 if !self.normalize {
                     builder = builder.no_normalize();
                 }
-                builder.go_with_consensus()
+                apply_config!(builder).go_with_consensus()
             } else {
                 let mut builder = ensemble(&llm, &self.prompt).n(self.n).aggregate(aggregate);
                 if self.with_reasoning {
@@ -1549,7 +1672,7 @@ impl PyEnsembleBuilder {
                 if !self.normalize {
                     builder = builder.no_normalize();
                 }
-                builder.go_with_consensus()
+                apply_config!(builder).go_with_consensus()
             }
         };
 
@@ -1579,6 +1702,10 @@ pub struct PyAgentBuilder {
     goal: String,
     tools: Vec<PyToolDef>,
     max_steps: usize,
+    // Runtime defaults (regex substitutions applied on final answer)
+    defaults: Option<PyDefaults>,
+    // Skill (persistent prompt context)
+    skill: Option<crate::skill::PySkill>,
 }
 
 impl Clone for PyAgentBuilder {
@@ -1588,6 +1715,8 @@ impl Clone for PyAgentBuilder {
             goal: self.goal.clone(),
             tools: self.tools.clone(),
             max_steps: self.max_steps,
+            defaults: self.defaults.clone(),
+            skill: self.skill.clone(),
         })
     }
 }
@@ -1606,7 +1735,23 @@ impl PyAgentBuilder {
             goal,
             tools: Vec::new(),
             max_steps: 10,
+            defaults: None,
+            skill: None,
         }
+    }
+
+    /// Set runtime defaults applied via regex substitution on the final answer.
+    fn defaults(&self, defaults: PyDefaults) -> Self {
+        let mut new = self.clone();
+        new.defaults = Some(defaults);
+        new
+    }
+
+    /// Attach a Skill (persistent prompt context) to this agent.
+    fn skill(&self, skill: crate::skill::PySkill) -> Self {
+        let mut new = self.clone();
+        new.skill = Some(skill);
+        new
     }
 
     /// Add a tool to the agent.
@@ -1626,6 +1771,8 @@ impl PyAgentBuilder {
     /// Execute the agent.
     fn go(&self) -> PyResult<PyAgentResult> {
         let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
+        let rust_defaults = self.defaults.as_ref().map(|d| d.inner.clone());
+        let rust_skill_text = self.skill.as_ref().map(|s| s.to_skill().render()).filter(|s| !s.is_empty());
 
         // Create Rust tools from PyToolDefs
         let rust_tools: Vec<PyCallableTool> = Python::with_gil(|py| {
@@ -1643,6 +1790,12 @@ impl PyAgentBuilder {
         let mut builder = agent(&llm, &self.goal).max_steps(self.max_steps);
         for tool in &rust_tools {
             builder = builder.tool(tool);
+        }
+        if let Some(defaults) = rust_defaults {
+            builder.config.defaults = Some(defaults);
+        }
+        if let Some(skill_text) = rust_skill_text {
+            builder.config.skill_text = Some(skill_text);
         }
 
         let result = builder.go();
@@ -1690,6 +1843,10 @@ pub struct PyProgramBuilder {
     regex_pattern: Option<String>,
     // Composed validator
     validator: Option<ValidatorNode>,
+    // Runtime defaults (regex substitutions applied before validation)
+    defaults: Option<PyDefaults>,
+    // Skill (persistent prompt context)
+    skill: Option<crate::skill::PySkill>,
 }
 
 impl Clone for PyProgramBuilder {
@@ -1705,6 +1862,8 @@ impl Clone for PyProgramBuilder {
             forbid_patterns: self.forbid_patterns.clone(),
             regex_pattern: self.regex_pattern.clone(),
             validator: self.validator.clone(),
+            defaults: self.defaults.clone(),
+            skill: self.skill.clone(),
         })
     }
 }
@@ -1729,6 +1888,8 @@ impl PyProgramBuilder {
             forbid_patterns: Vec::new(),
             regex_pattern: None,
             validator: None,
+            defaults: None,
+            skill: None,
         }
     }
 
@@ -1737,6 +1898,20 @@ impl PyProgramBuilder {
         let mut new = self.clone();
         new.validator = Some(extract_validator_node(validator)?);
         Ok(new)
+    }
+
+    /// Set runtime defaults applied via regex substitution before validation.
+    fn defaults(&self, defaults: PyDefaults) -> Self {
+        let mut new = self.clone();
+        new.defaults = Some(defaults);
+        new
+    }
+
+    /// Attach a Skill (persistent prompt context) to this builder.
+    fn skill(&self, skill: crate::skill::PySkill) -> Self {
+        let mut new = self.clone();
+        new.skill = Some(skill);
+        new
     }
 
     /// Set the code executor.
@@ -1796,12 +1971,27 @@ impl PyProgramBuilder {
 
         let llm = Python::with_gil(|py| PyCallableLlm::new_from_ref(py, &self.llm));
         let rust_executor = executor.build_executor();
+        let rust_defaults = self.defaults.as_ref().map(|d| d.inner.clone());
+        let rust_skill_text = self.skill.as_ref().map(|s| s.to_skill().render()).filter(|s| !s.is_empty());
+
+        macro_rules! apply_config {
+            ($builder:expr) => {{
+                let mut b = $builder;
+                if let Some(ref defaults) = rust_defaults {
+                    b.config.defaults = Some(defaults.clone());
+                }
+                if let Some(ref skill_text) = rust_skill_text {
+                    b.config.skill_text = Some(skill_text.clone());
+                }
+                b
+            }};
+        }
 
         let result = if let Some(ref node) = self.validator {
-            let dyn_v = Python::with_gil(|py| DynValidator(node.materialize(py)));
+            let validator = Python::with_gil(|py| node.materialize(py));
             let mut builder = program(&llm, &self.problem)
                 .executor(rust_executor)
-                .validate(dyn_v)
+                .validate(validator)
                 .max_iter(self.max_iter as u32);
             if !self.include_code {
                 builder = builder.no_code();
@@ -1809,7 +1999,7 @@ impl PyProgramBuilder {
             if let Some(ref lang) = self.language {
                 builder = builder.language(lang);
             }
-            builder.go()
+            apply_config!(builder).go()
         } else {
             let has_inline = !self.require_patterns.is_empty()
                 || !self.forbid_patterns.is_empty()
@@ -1836,7 +2026,7 @@ impl PyProgramBuilder {
                 if let Some(ref lang) = self.language {
                     builder = builder.language(lang);
                 }
-                builder.go()
+                apply_config!(builder).go()
             } else {
                 let mut builder = program(&llm, &self.problem)
                     .executor(rust_executor)
@@ -1847,7 +2037,7 @@ impl PyProgramBuilder {
                 if let Some(ref lang) = self.language {
                     builder = builder.language(lang);
                 }
-                builder.go()
+                apply_config!(builder).go()
             }
         };
 

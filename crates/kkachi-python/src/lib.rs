@@ -33,11 +33,13 @@ use pyo3::prelude::*;
 mod builder;
 mod checks;
 mod compose;
+mod defaults;
 mod dspy;
 mod jinja;
 mod llm;
 mod rewrite;
 mod semantic;
+pub(crate) mod skill;
 mod template;
 mod types;
 mod validator;
@@ -45,11 +47,13 @@ mod validator;
 use builder::*;
 use checks::*;
 use compose::*;
+use defaults::*;
 use dspy::*;
 use jinja::*;
 use llm::*;
 use rewrite::*;
 use semantic::*;
+use skill::*;
 use template::*;
 use types::*;
 use validator::*;
@@ -75,6 +79,7 @@ fn _kkachi(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Validators
     m.add_class::<PyCliValidator>()?;
+    m.add_class::<PyCliCapture>()?;
     m.add_class::<PyChecks>()?;
     m.add_class::<PySemantic>()?;
     m.add_class::<PyValidator>()?;
@@ -93,6 +98,16 @@ fn _kkachi(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRewrite>()?;
     m.add_function(wrap_pyfunction!(py_extract_code, m)?)?;
     m.add_function(wrap_pyfunction!(py_extract_all_code, m)?)?;
+
+    // Runtime defaults
+    m.add_class::<PyDefaults>()?;
+    m.add_class::<PyDefaultAnnotation>()?;
+
+    // Skills (persistent prompt context)
+    m.add_class::<PySkill>()?;
+
+    // Package result
+    m.add_class::<PyPackageResult>()?;
 
     // DSPy-style modules - Builders
     m.add_class::<PyReasonBuilder>()?;

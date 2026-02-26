@@ -19,7 +19,9 @@
 //!     .go();
 //! ```
 
+use crate::recursive::defaults::Defaults;
 use crate::recursive::llm::Llm;
+use crate::recursive::skill::Skill;
 use crate::recursive::validate::{NoValidation, Validate};
 use smallvec::SmallVec;
 
@@ -87,6 +89,10 @@ pub struct BestOfConfig {
     pub extract_lang: Option<String>,
     /// Whether to generate candidates in parallel using threads.
     pub parallel: bool,
+    /// Runtime defaults applied via regex substitution before scoring.
+    pub defaults: Option<Defaults>,
+    /// Pre-rendered skill instructions (injected at the start of prompt).
+    pub skill_text: Option<String>,
 }
 
 impl Default for BestOfConfig {
@@ -98,6 +104,8 @@ impl Default for BestOfConfig {
             diverse: true,
             extract_lang: None,
             parallel: false,
+            defaults: None,
+            skill_text: None,
         }
     }
 }
@@ -112,7 +120,8 @@ pub struct BestOf<'a, L: Llm, V: Validate, S: Scorer> {
     n: usize,
     validator: V,
     scorer: S,
-    config: BestOfConfig,
+    /// Configuration for Best of N generation.
+    pub config: BestOfConfig,
 }
 
 impl<'a, L: Llm> BestOf<'a, L, NoValidation, DefaultScorer> {
@@ -218,6 +227,28 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
         self
     }
 
+    /// Attach a skill (persistent prompt context) to this builder.
+    ///
+    /// Skill instructions are prepended to the prompt before generation.
+    pub fn skill(mut self, skill: &Skill<'_>) -> Self {
+        let rendered = skill.render();
+        if rendered.is_empty() {
+            self.config.skill_text = None;
+        } else {
+            self.config.skill_text = Some(rendered);
+        }
+        self
+    }
+
+    /// Set runtime defaults applied via regex substitution before scoring.
+    ///
+    /// Defaults are applied to each candidate's output before scoring and
+    /// validation, and to the final best output.
+    pub fn defaults(mut self, defaults: Defaults) -> Self {
+        self.config.defaults = Some(defaults);
+        self
+    }
+
     /// Execute synchronously and return the best result.
     #[cfg(feature = "native")]
     pub fn go(self) -> BestOfResult {
@@ -277,10 +308,17 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
         let mut total_tokens = 0u32;
         let mut error: Option<String> = None;
 
-        let prompt = if self.config.with_reasoning {
-            format!("{}\n\nLet's think step by step.", self.prompt)
-        } else {
-            self.prompt.to_string()
+        let prompt = {
+            let mut p = String::new();
+            if let Some(ref s) = self.config.skill_text {
+                p.push_str(s);
+                p.push('\n');
+            }
+            p.push_str(self.prompt);
+            if self.config.with_reasoning {
+                p.push_str("\n\nLet's think step by step.");
+            }
+            p
         };
 
         if self.config.parallel {
@@ -343,6 +381,10 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
                         .unwrap_or_else(|| output.text.clone())
                 } else {
                     output.text.clone()
+                };
+                let text_to_score = match self.config.defaults {
+                    Some(ref d) => d.apply(&text_to_score),
+                    None => text_to_score,
                 };
 
                 let scorer_score = self.scorer.score(&text_to_score).clamp(0.0, 1.0);
@@ -429,6 +471,10 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
                 } else {
                     output.text.clone()
                 };
+                let text_to_score = match self.config.defaults {
+                    Some(ref d) => d.apply(&text_to_score),
+                    None => text_to_score,
+                };
 
                 let scorer_score = self.scorer.score(&text_to_score).clamp(0.0, 1.0);
                 let validator_score = self.validator.validate(&text_to_score);
@@ -470,7 +516,10 @@ impl<'a, L: Llm, V: Validate, S: Scorer> BestOf<'a, L, V, S> {
             );
         }
 
-        let best = candidates[best_idx].output.clone();
+        let best = match self.config.defaults {
+            Some(ref d) => d.apply(&candidates[best_idx].output),
+            None => candidates[best_idx].output.clone(),
+        };
         let pool = CandidatePool {
             candidates,
             total_tokens,
@@ -755,5 +804,46 @@ mod tests {
     fn test_fn_scorer() {
         let scorer = FnScorer(|s: &str| s.len() as f64 / 10.0);
         assert!((scorer.score("hello") - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_best_of_with_skill() {
+        use crate::recursive::skill::Skill;
+
+        let llm = MockLlm::new(|prompt, _| {
+            if prompt.contains("deletionProtection") {
+                "skill applied".to_string()
+            } else {
+                "no skill".to_string()
+            }
+        });
+
+        let skill = Skill::new()
+            .instruct("deletionProtection", "Always set deletionProtection: false.");
+
+        let result = best_of(&llm, "Generate config")
+            .n(1)
+            .skill(&skill)
+            .go();
+
+        assert!(result.output.contains("skill applied"));
+    }
+
+    #[test]
+    fn test_best_of_with_defaults() {
+        use crate::recursive::defaults::Defaults;
+
+        let llm = MockLlm::new(|_, _| "user:admin@example.com".to_string());
+
+        let defaults =
+            Defaults::new().set("email", r"admin@example\.com", "real@company.com");
+
+        let result = best_of(&llm, "Generate IAM")
+            .n(1)
+            .defaults(defaults)
+            .go();
+
+        assert!(result.output.contains("real@company.com"));
+        assert!(!result.output.contains("admin@example.com"));
     }
 }

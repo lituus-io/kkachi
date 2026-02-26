@@ -78,8 +78,13 @@ pub mod prediction;
 pub mod signature;
 pub mod types;
 
-// Phase 3: DSPy modules
-pub mod modules;
+// v0.4.0: New core modules
+pub mod compiled;
+pub mod composable;
+pub mod evaluate;
+pub mod metric;
+pub mod typed_adapter;
+pub mod typed_sig;
 
 // Phase 4: Advanced optimizers
 pub mod optimizers;
@@ -121,6 +126,20 @@ pub use predict::{
 pub use prediction::Prediction;
 pub use signature::{Signature, SignatureBuilder};
 
+// v0.4.0: Typed signature system
+pub use typed_sig::{ParsedOutput, TypedField, TypedSignature, ValueKind};
+pub use typed_adapter::{ChatTypedAdapter, JsonTypedAdapter, TypedAdapter};
+
+// v0.4.0: Metric & evaluation
+pub use metric::{Contains as MetricContains, ExactMatch, F1Token, FnMetric, Metric};
+pub use evaluate::{EvalResult, Evaluate, ExampleResult};
+
+// v0.4.0: Compiled programs
+pub use compiled::CompiledProgram;
+
+// v0.4.0: Composable modules
+pub use composable::{ComposableModule, ModuleState};
+
 // Advanced optimizers
 pub use optimizers::{
     COPROConfig, COPROResult, CombineStrategy, Embedder as OptimizerEmbedder, EmbeddingIndex,
@@ -129,10 +148,6 @@ pub use optimizers::{
     LabeledFewShotBuilder, MIPROConfig, MIPROResult, OptimizeInto, SIMBAConfig, SIMBAResult,
     SelectionStrategy, TPESampler, COPRO, MIPRO, SIMBA,
 };
-
-// DSPy modules (accessible via kkachi::modules::*)
-// Note: These are the legacy DSPy-style module types. Prefer the recursive API
-// (e.g., `refine()`, `best_of()`, `ensemble()`, `agent()`) for new code.
 
 // Recall/Precision mode
 pub use recall_precision::RecallPrecisionMode;
@@ -317,6 +332,15 @@ pub use recursive::{
     VectorIndex,
 };
 
+// v0.4.0: Critic system
+pub use recursive::critic::{Critic, CriticFeedback, FnCritic, LlmCritic, NoCritic};
+
+// v0.4.0: Multimodal input
+pub use recursive::input::{ContentType, Input, InputPart, MultimodalLlm};
+
+// v0.4.0: State save/load
+pub use recursive::state::{Saveable, SaveableExt, StateMap, StateValue};
+
 // Feature-gated recursive exports
 #[cfg(feature = "hnsw")]
 pub use recursive::HnswIndex;
@@ -361,6 +385,24 @@ pub mod prelude {
         Example, Field, FieldMap, InputField, Inputs, Module, OutputField, Predict, Prediction,
         Signature, SignatureBuilder,
     };
+
+    // v0.4.0: Typed signatures
+    pub use crate::{TypedSignature, ValueKind};
+
+    // v0.4.0: Metrics & evaluation
+    pub use crate::{ExactMatch, Metric};
+
+    // v0.4.0: Compiled programs
+    pub use crate::CompiledProgram;
+
+    // v0.4.0: Composable modules
+    pub use crate::{ComposableModule, ModuleState};
+
+    // v0.4.0: Critic
+    pub use crate::{Critic, NoCritic};
+
+    // v0.4.0: State
+    pub use crate::{Saveable, SaveableExt, StateMap};
 
     // Optimizer system
     pub use crate::{
