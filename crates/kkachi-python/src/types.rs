@@ -192,6 +192,20 @@ impl PyMemory {
         self.inner.tags()
     }
 
+    /// List all entries in the store.
+    fn list(&self) -> Vec<PyRecall> {
+        self.inner
+            .all()
+            .into_iter()
+            .map(|r| PyRecall {
+                id: r.id.to_string(),
+                content: r.content.to_string(),
+                score: r.score,
+                tag: r.tag.map(|t| t.to_string()),
+            })
+            .collect()
+    }
+
     /// Enable persistent storage using DuckDB.
     ///
     /// Args:

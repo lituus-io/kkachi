@@ -113,7 +113,7 @@ jobs:
           merge-multiple: true
 
       - name: Install twine
-        run: pip install twine
+        run: pip install "twine>=5.0,<6.0"
 
       - name: Publish to PyPI via twine
         env:

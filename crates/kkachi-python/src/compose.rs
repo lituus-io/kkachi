@@ -171,11 +171,7 @@ impl From<Score<'_>> for PyScoreResult {
         Self {
             value: score.value,
             feedback: score.feedback.map(|f| f.into_owned()),
-            confidence: if (score.confidence - 1.0).abs() < f64::EPSILON {
-                None
-            } else {
-                Some(score.confidence)
-            },
+            confidence: Some(score.confidence),
         }
     }
 }

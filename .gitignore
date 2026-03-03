@@ -78,6 +78,9 @@ node_modules/
 .Trashes
 ehthumbs.db
 
+# Examples (local-only, contain environment-specific configuration)
+/examples/
+
 # Python (for kkachi-python bindings)
 __pycache__/
 *.py[cod]

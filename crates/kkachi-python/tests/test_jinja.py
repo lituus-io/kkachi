@@ -100,11 +100,11 @@ def test_jinja_template_error_invalid_syntax():
         JinjaTemplate.from_str("bad", "{{ unclosed")
 
 
-def test_jinja_template_error_undefined_variable():
-    """Test error on undefined variable."""
+def test_jinja_template_undefined_variable():
+    """Test that undefined variables render as empty strings (standard Jinja2 behavior)."""
     template = JinjaTemplate.from_str("test", "{{ undefined }}")
-    with pytest.raises(RuntimeError, match="render error"):
-        template.render({})
+    result = template.render({})
+    assert result == ""
 
 
 def test_jinja_formatter_creation():

@@ -142,7 +142,7 @@ class TestRealTools:
     def test_rustfmt_valid_code(self):
         """rustfmt should accept valid Rust code."""
         validator = CliValidator("rustfmt").args(["--check"]).ext("rs")
-        result = validator.validate("fn main() {}")
+        result = validator.validate("fn main() {}\n")
 
         # Valid code should pass
         assert result.value > 0.0
