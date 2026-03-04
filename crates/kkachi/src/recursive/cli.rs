@@ -1028,9 +1028,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn test_cli_as_tool() {
-        let t = cli("cat")
-            .stdin()
-            .as_tool("cat_tool", "Reads stdin");
+        let t = cli("cat").stdin().as_tool("cat_tool", "Reads stdin");
 
         assert_eq!(Tool::name(&t), "cat_tool");
         assert_eq!(Tool::description(&t), "Reads stdin");
