@@ -991,8 +991,8 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn test_cli_capture() {
-        let v = cli("echo").arg("captured").stdin().capture();
-        let _ = v.validate("input");
+        let v = cli("cat").stdin().capture();
+        let _ = v.validate("captured");
 
         let captures = v.get_captures();
         assert_eq!(captures.len(), 1);
@@ -1028,15 +1028,14 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn test_cli_as_tool() {
-        let t = cli("echo")
-            .arg("hello")
+        let t = cli("cat")
             .stdin()
-            .as_tool("echo_tool", "Echoes hello");
+            .as_tool("cat_tool", "Reads stdin");
 
-        assert_eq!(Tool::name(&t), "echo_tool");
-        assert_eq!(Tool::description(&t), "Echoes hello");
+        assert_eq!(Tool::name(&t), "cat_tool");
+        assert_eq!(Tool::description(&t), "Reads stdin");
 
-        let result = futures::executor::block_on(Tool::execute(&t, "input"));
+        let result = futures::executor::block_on(Tool::execute(&t, "hello"));
         assert!(result.is_ok());
         assert!(result.unwrap().contains("hello"));
     }
