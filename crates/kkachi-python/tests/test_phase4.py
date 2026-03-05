@@ -680,7 +680,7 @@ class TestImports:
 
     def test_version(self):
         from kkachi import __version__
-        assert __version__ == "0.1.0"
+        assert __version__ == "0.1.2"
 
 
 # =============================================================================
