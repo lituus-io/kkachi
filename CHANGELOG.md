@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.2 (2026-03-04)
+
+### Examples
+
+- **New Python examples** — Added simple `refine.py`, `reason.py`, `best_of.py`, `ensemble.py` matching the Rust examples
+- **Shared pipeline utilities** — Extracted `_pipeline_common.py` to deduplicate ~150 lines across pipeline examples
+- **Examples README** — Added `examples/README.md` with learning progression, prerequisites, and quick-start commands
+- **Environment variable overrides** — All pipeline examples now use `os.environ.get()` with configurable defaults
+- **Removed hardcoded paths** — Replaced user-specific paths with generic placeholders
+- **Consistent error handling** — All Python examples have `try/except` with clear setup instructions
+- **Removed branded references** — Replaced provider-specific references with generic LLM placeholders
+
 ## v0.1.0 (2026-03-02)
 
 Initial release.
