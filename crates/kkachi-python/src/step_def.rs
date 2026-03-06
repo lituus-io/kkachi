@@ -467,7 +467,7 @@ impl PyStepDef {
     /// Execute this step with the given input text.
     fn run(&self, input: &str) -> PyResult<PyStepResult> {
         let step = self.node.materialize();
-        let output = futures::executor::block_on(step.run_dyn(input))
+        let output = kkachi::recursive::block_on(step.run_dyn(input))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(PyStepResult {
             text: output.text,
@@ -560,7 +560,7 @@ pub fn py_run_all_steps(
     let materialized: Vec<Box<dyn DynStep>> = steps.iter().map(|s| s.node.materialize()).collect();
     let dyn_refs: Vec<&dyn DynStep> = materialized.iter().map(|s| s.as_ref()).collect();
 
-    let results = futures::executor::block_on(kkachi::recursive::step::run_all(&input, &dyn_refs));
+    let results = kkachi::recursive::block_on(kkachi::recursive::step::run_all(&input, &dyn_refs));
 
     results
         .into_iter()

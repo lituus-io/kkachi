@@ -284,7 +284,7 @@ impl PyApiLlm {
         // so a single poll always resolves immediately.
         py.allow_threads(|| {
             let mut fut = llm.generate(&prompt, "", feedback.as_deref());
-            let waker = futures::task::noop_waker();
+            let waker = std::task::Waker::noop();
             let mut cx = std::task::Context::from_waker(&waker);
             match fut.as_mut().poll(&mut cx) {
                 std::task::Poll::Ready(Ok(output)) => Ok(output.text),

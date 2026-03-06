@@ -434,4 +434,25 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap().text, "ok");
     }
+
+    #[test]
+    fn test_rate_limit_wait_via_block_on() {
+        // Plain #[test] — exhaust burst token, second call triggers
+        // tokio::time::sleep via block_on → should not panic.
+        // Note: generate() must be called inside the async block because
+        // it eagerly creates tokio::time::sleep during future construction.
+        let llm = MockLlm::new(|_, _| "ok".to_string())
+            .with_rate_limit_config(RateLimitConfig::new(10.0).with_burst(1));
+
+        // Both calls inside one runtime to mirror real usage (reason().go()).
+        crate::recursive::shared::block_on(async {
+            // First call uses the burst token (immediate).
+            let r1 = llm.generate("test", "", None).await;
+            assert!(r1.is_ok());
+
+            // Second call must wait (triggers tokio::time::sleep).
+            let r2 = llm.generate("test", "", None).await;
+            assert!(r2.is_ok());
+        });
+    }
 }

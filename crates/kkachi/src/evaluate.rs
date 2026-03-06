@@ -142,9 +142,9 @@ impl<'a, L: Llm, M: Metric> Evaluate<'a, L, M> {
         self
     }
 
-    /// Run the evaluation synchronously using `futures::executor::block_on`.
+    /// Run the evaluation synchronously.
     pub fn run(self, dataset: &ExampleSet<'_>) -> EvalResult {
-        futures::executor::block_on(self.run_async(dataset))
+        crate::recursive::shared::block_on(self.run_async(dataset))
     }
 
     /// Run the evaluation asynchronously.

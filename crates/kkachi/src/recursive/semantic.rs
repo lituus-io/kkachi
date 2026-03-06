@@ -256,7 +256,7 @@ impl<'a, L: Llm> Validate for SemanticValidator<'a, L> {
         // again on the same thread panics. A scoped thread has its own stack
         // with no executor, so the inner block_on works safely.
         let response = std::thread::scope(|s| {
-            s.spawn(|| futures::executor::block_on(self.llm.generate(&prompt, "", None)))
+            s.spawn(|| crate::recursive::shared::block_on(self.llm.generate(&prompt, "", None)))
                 .join()
                 .unwrap_or_else(|_| {
                     Err(crate::error::Error::module(

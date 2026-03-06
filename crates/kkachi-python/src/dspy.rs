@@ -914,7 +914,7 @@ impl PyExecutor {
     /// Execute code directly and return the result.
     fn execute(&self, code: String) -> PyResult<PyExecutionResult> {
         let executor = self.build_executor();
-        let result = futures::executor::block_on(executor.execute(&code));
+        let result = kkachi::recursive::block_on(executor.execute(&code));
         Ok(PyExecutionResult {
             stdout: result.stdout,
             stderr: result.stderr,

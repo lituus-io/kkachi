@@ -59,7 +59,8 @@ pub mod refine;
 pub mod result;
 pub mod rewrite;
 pub mod semantic;
-pub(crate) mod shared;
+pub mod shared;
+pub use shared::block_on;
 pub mod typed;
 pub mod validate;
 

@@ -332,4 +332,27 @@ mod tests {
 
         assert_eq!(llm.model_name(), "test-model");
     }
+
+    #[test]
+    fn test_retry_sleep_via_block_on() {
+        // This is a plain #[test] (no tokio runtime). The retry sleep path
+        // uses tokio::time::sleep, which requires block_on to provide a runtime.
+        let llm = FailingLlm::new("HTTP 429 rate limit exceeded").with_retry_config(RetryConfig {
+            max_retries: 2,
+            initial_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(10),
+            backoff_factor: 2.0,
+        });
+
+        let result = crate::recursive::shared::block_on(llm.generate("test", "", None));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_retry_succeeds_via_block_on() {
+        let llm = MockLlm::new(|_, _| "ok".to_string()).with_retry(3);
+        let result = crate::recursive::shared::block_on(llm.generate("test", "", None));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().text, "ok");
+    }
 }
