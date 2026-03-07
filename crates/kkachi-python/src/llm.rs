@@ -278,20 +278,13 @@ impl PyApiLlm {
             .built
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("LLM not initialized"))?;
-        // Poll the future manually to avoid nesting inside
-        // futures::executor::block_on (which reason().go() already uses).
-        // ApiLlm.generate() returns a Ready future (synchronous HTTP call),
-        // so a single poll always resolves immediately.
+        // Use block_on to run the future with a proper Tokio runtime so that
+        // retry (tokio::time::sleep) and rate-limit wrappers work correctly.
         py.allow_threads(|| {
-            let mut fut = llm.generate(&prompt, "", feedback.as_deref());
-            let waker = std::task::Waker::noop();
-            let mut cx = std::task::Context::from_waker(&waker);
-            match fut.as_mut().poll(&mut cx) {
-                std::task::Poll::Ready(Ok(output)) => Ok(output.text),
-                std::task::Poll::Ready(Err(e)) => Err(PyRuntimeError::new_err(format!("{e}"))),
-                std::task::Poll::Pending => Err(PyRuntimeError::new_err(
-                    "LLM generate returned Pending (unexpected async operation)",
-                )),
+            let result = kkachi::recursive::block_on(llm.generate(&prompt, "", feedback.as_deref()));
+            match result {
+                Ok(output) => Ok(output.text),
+                Err(e) => Err(PyRuntimeError::new_err(format!("{e}"))),
             }
         })
     }

@@ -65,25 +65,34 @@ pub(crate) fn transform_output(
 
 /// Execute a future synchronously.
 ///
-/// When the `native` feature is enabled, creates a Tokio current-thread
-/// runtime with the time driver so that `tokio::time::sleep` (used by
-/// retry and rate-limit wrappers) works correctly. Falls back to
-/// `futures::executor::block_on` when already inside a Tokio runtime
-/// (e.g. `#[tokio::test]`) to avoid the "cannot start a runtime from
-/// within a runtime" panic.
+/// When the `native` feature is enabled, creates a Tokio multi-thread
+/// runtime (1 worker) with the time driver so that `tokio::time::sleep`
+/// (used by retry and rate-limit wrappers) works correctly.
+///
+/// When already inside a Tokio runtime (e.g. nested `block_on` calls from
+/// Python's `ApiLlm.__call__` inside `reason().go()`), uses
+/// `block_in_place` + `Handle::block_on` to run the future on the
+/// existing runtime without creating a new one.
 #[cfg(feature = "native")]
 pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
-    if tokio::runtime::Handle::try_current().is_ok() {
-        // Inside an existing Tokio runtime (e.g. #[tokio::test]).
-        // Cannot nest runtimes — callers should use .run().await instead.
-        futures::executor::block_on(f)
-    } else {
-        // No runtime (Python/CLI path) — create one with time driver.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .expect("failed to create tokio runtime for block_on");
-        rt.block_on(f)
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            // Inside an existing Tokio runtime — use block_in_place to
+            // allow blocking on the current thread while the runtime
+            // continues on its worker thread.
+            tokio::task::block_in_place(|| handle.block_on(f))
+        }
+        Err(_) => {
+            // No runtime (Python/CLI path) — create one with time driver.
+            // Use multi_thread(1) so that nested block_on calls can use
+            // block_in_place (which requires a multi-thread runtime).
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_time()
+                .build()
+                .expect("failed to create tokio runtime for block_on");
+            rt.block_on(f)
+        }
     }
 }
 
@@ -125,12 +134,23 @@ mod tests {
         assert_eq!(val, 3);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn test_block_on_inside_tokio_runtime() {
-        // When already inside a Tokio runtime, block_on should still work
-        // for ready futures (falls back to futures::executor).
+        // When already inside a Tokio runtime, block_on uses
+        // block_in_place + handle.block_on (requires multi-thread runtime).
         let val = block_on(std::future::ready(99));
         assert_eq!(val, 99);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_nested_block_on_with_sleep() {
+        // Nested block_on with tokio::time::sleep — the exact scenario
+        // when ApiLlm.__call__ (with retry) is invoked inside reason().go().
+        let val = block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            "nested_slept"
+        });
+        assert_eq!(val, "nested_slept");
     }
 
     #[test]
