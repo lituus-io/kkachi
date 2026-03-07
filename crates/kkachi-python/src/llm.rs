@@ -281,7 +281,8 @@ impl PyApiLlm {
         // Use block_on to run the future with a proper Tokio runtime so that
         // retry (tokio::time::sleep) and rate-limit wrappers work correctly.
         py.allow_threads(|| {
-            let result = kkachi::recursive::block_on(llm.generate(&prompt, "", feedback.as_deref()));
+            let result =
+                kkachi::recursive::block_on(llm.generate(&prompt, "", feedback.as_deref()));
             match result {
                 Ok(output) => Ok(output.text),
                 Err(e) => Err(PyRuntimeError::new_err(format!("{e}"))),
