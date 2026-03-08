@@ -613,7 +613,7 @@ where
         let prompt = self.build_prompt(input);
         Box::pin(async move {
             let output = self.llm.generate(&prompt, "", None).await?;
-            Ok(output.text)
+            Ok(output.text.to_string())
         })
     }
 

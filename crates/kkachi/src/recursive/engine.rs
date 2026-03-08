@@ -101,7 +101,7 @@ impl<'a, L: Llm> GenerationEngine<'a, L> {
                         );
                         candidates.push(RawCandidate {
                             index: i,
-                            raw_text: output.text,
+                            raw_text: output.text.to_string(),
                             transformed_text: transformed,
                             tokens,
                         });
@@ -142,14 +142,14 @@ impl<'a, L: Llm> GenerationEngine<'a, L> {
                         }
                         output.text[..end].to_string()
                     } else {
-                        output.text.clone()
+                        output.text.to_string()
                     };
                     prev_snippets.push(snippet);
                 }
 
                 candidates.push(RawCandidate {
                     index: i,
-                    raw_text: output.text,
+                    raw_text: output.text.to_string(),
                     transformed_text: transformed,
                     tokens,
                 });

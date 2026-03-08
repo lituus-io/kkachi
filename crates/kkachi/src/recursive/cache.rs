@@ -2,6 +2,9 @@
 // All Rights Reserved.
 // Licensed under PolyForm Noncommercial 1.0.0
 
+// pin-project-lite generates projection types without doc comments
+#![allow(missing_docs)]
+
 //! LRU caching layer for LLM calls.
 //!
 //! This module provides [`CachedLlm`], a wrapper that caches LLM responses
@@ -57,44 +60,44 @@ impl<L: Llm> CachedLlm<L> {
     }
 }
 
-/// Future returned by `CachedLlm::generate()`.
-///
-/// Either returns a cached result immediately (Hit) or awaits the
-/// inner LLM's future and caches the result on success (Miss).
-pub enum CachedFut<'a, L: Llm + 'a> {
-    /// Cache hit — result is ready immediately.
-    Hit(Option<Result<LmOutput>>),
-    /// Cache miss — awaiting inner LLM future.
-    Miss {
-        /// The inner LLM future being awaited.
-        inner: Pin<Box<L::GenerateFut<'a>>>,
-        /// Reference to the shared cache for storing the result.
-        cache: &'a Mutex<LruCache<u64, LmOutput>>,
-        /// The cache key for this request.
-        key: u64,
-    },
+pin_project_lite::pin_project! {
+    /// Future returned by `CachedLlm::generate()`.
+    ///
+    /// Either returns a cached result immediately (Hit) or awaits the
+    /// inner LLM's future and caches the result on success (Miss).
+    ///
+    /// Uses `pin-project-lite` for structural pinning of the inner future,
+    /// avoiding the `Box::pin()` allocation that was previously required.
+    #[project = CachedFutProj]
+    pub enum CachedFut<'a, L>
+    where
+        L: Llm,
+        L: 'a,
+    {
+        /// Cache hit — result is ready immediately.
+        Hit { result: Option<Result<LmOutput>> },
+        /// Cache miss — awaiting inner LLM future.
+        Miss {
+            #[pin]
+            inner: L::GenerateFut<'a>,
+            cache: &'a Mutex<LruCache<u64, LmOutput>>,
+            key: u64,
+        },
+    }
 }
-
-// SAFETY: All fields are Unpin:
-// - Option<Result<LmOutput>>: Unpin
-// - Pin<Box<T>>: always Unpin (Box is Unpin)
-// - &'a Mutex<...>: Unpin
-// - u64: Unpin
-impl<'a, L: Llm + 'a> Unpin for CachedFut<'a, L> {}
 
 impl<'a, L: Llm + 'a> Future for CachedFut<'a, L> {
     type Output = Result<LmOutput>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.get_mut();
-        match this {
-            CachedFut::Hit(result) => Poll::Ready(
+        match self.project() {
+            CachedFutProj::Hit { result } => Poll::Ready(
                 result
                     .take()
                     .expect("CachedFut::Hit polled after completion"),
             ),
-            CachedFut::Miss { inner, cache, key } => {
-                let output = ready!(inner.as_mut().poll(cx));
+            CachedFutProj::Miss { inner, cache, key } => {
+                let output = ready!(inner.poll(cx));
                 if let Ok(ref lm_out) = output {
                     cache.lock().unwrap().put(*key, lm_out.clone());
                 }
@@ -120,12 +123,14 @@ impl<L: Llm> Llm for CachedLlm<L> {
 
         // Check cache
         if let Some(cached) = self.cache.lock().unwrap().get(&key) {
-            return CachedFut::Hit(Some(Ok(cached.clone())));
+            return CachedFut::Hit {
+                result: Some(Ok(cached.clone())),
+            };
         }
 
         // Cache miss - return future that will cache on completion
         CachedFut::Miss {
-            inner: Box::pin(self.inner.generate(prompt, context, feedback)),
+            inner: self.inner.generate(prompt, context, feedback),
             cache: &self.cache,
             key,
         }
@@ -179,12 +184,12 @@ mod tests {
 
         // First call - cache miss
         let r1 = llm.generate("hello", "", None).await.unwrap();
-        assert_eq!(r1.text, "response");
+        assert_eq!(&*r1.text, "response");
         assert_eq!(llm.cache_len(), 1);
 
         // Second call - cache hit
         let r2 = llm.generate("hello", "", None).await.unwrap();
-        assert_eq!(r2.text, "response");
+        assert_eq!(&*r2.text, "response");
         assert_eq!(llm.cache_len(), 1);
     }
 
@@ -195,8 +200,8 @@ mod tests {
         let r1 = llm.generate("a", "", None).await.unwrap();
         let r2 = llm.generate("b", "", None).await.unwrap();
 
-        assert_eq!(r1.text, "reply to: a");
-        assert_eq!(r2.text, "reply to: b");
+        assert_eq!(&*r1.text, "reply to: a");
+        assert_eq!(&*r2.text, "reply to: b");
         assert_eq!(llm.cache_len(), 2);
     }
 
@@ -211,8 +216,8 @@ mod tests {
         let r1 = llm.generate("p", "", None).await.unwrap();
         let r2 = llm.generate("p", "", Some("improve")).await.unwrap();
 
-        assert_eq!(r1.text, "no feedback");
-        assert_eq!(r2.text, "with: improve");
+        assert_eq!(&*r1.text, "no feedback");
+        assert_eq!(&*r2.text, "with: improve");
         assert_eq!(llm.cache_len(), 2); // Different keys
     }
 

@@ -130,7 +130,7 @@ impl<'a, L: Llm> Conversation<'a, L> {
         let prompt = self.format_messages();
         let output: LmOutput = self.llm.generate(&prompt, "", None).await?;
         self.history
-            .push(Message::new(Role::Assistant, output.text));
+            .push(Message::new(Role::Assistant, output.text.to_string()));
         Ok(&self.history.last().unwrap().content)
     }
 
@@ -142,7 +142,7 @@ impl<'a, L: Llm> Conversation<'a, L> {
         let prompt = self.format_messages();
         let output: LmOutput = self.llm.generate(&prompt, context, None).await?;
         self.history
-            .push(Message::new(Role::Assistant, output.text));
+            .push(Message::new(Role::Assistant, output.text.to_string()));
         Ok(&self.history.last().unwrap().content)
     }
 

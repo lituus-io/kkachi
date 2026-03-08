@@ -532,9 +532,9 @@ impl<'a, L: Llm, V: Validate + 'a, F: PromptFormatter + 'a> Refine<'a, L, V, F> 
                 let output = if let Some(ref lang) = self.config.extract_lang {
                     extract_code(&result.text, lang)
                         .map(|s| s.to_string())
-                        .unwrap_or(result.text)
+                        .unwrap_or_else(|| result.text.to_string())
                 } else {
-                    result.text
+                    result.text.to_string()
                 };
 
                 // Validate
@@ -639,7 +639,7 @@ impl<'a, L: Llm, V: Validate + 'a, F: PromptFormatter + 'a> Refine<'a, L, V, F> 
 
         // Add retrieved examples from memory
         if let Some(ref memory) = self.memory {
-            let recalls = memory.search(self.prompt, self.k);
+            let recalls = memory.search(self.prompt, self.k)?;
             for recall in recalls {
                 context.push_str(&format!(
                     "Similar example (relevance: {:.2}):\n{}\n\n",
@@ -697,7 +697,7 @@ impl<'a, L: Llm, V: Validate + 'a, F: PromptFormatter + 'a> Refine<'a, L, V, F> 
                     .generate(&effective_prompt, &context, feedback.as_deref())
                     .await?;
                 let tokens = result.prompt_tokens + result.completion_tokens;
-                (result.text, 0.0, tokens)
+                (result.text.to_string(), 0.0, tokens)
             };
 
             // Track tokens
@@ -797,7 +797,7 @@ impl<'a, L: Llm, V: Validate + 'a, F: PromptFormatter + 'a> Refine<'a, L, V, F> 
                     (&mut self.memory, self.config.learn_threshold)
                 {
                     if effective_score >= threshold {
-                        memory.learn(self.prompt, &output, effective_score);
+                        let _ = memory.learn(self.prompt, &output, effective_score);
                     }
                 }
 
@@ -882,7 +882,7 @@ impl<'a, L: Llm, V: Validate + 'a, F: PromptFormatter + 'a> Refine<'a, L, V, F> 
             (&mut self.memory, self.config.learn_threshold)
         {
             if best_score >= threshold {
-                memory.learn(self.prompt, &best_output, best_score);
+                let _ = memory.learn(self.prompt, &best_output, best_score);
             }
         }
 
@@ -928,7 +928,7 @@ impl<'a, L: Llm, V: Validate + 'a, F: PromptFormatter + 'a> Refine<'a, L, V, F> 
 
             if score.value > best_score {
                 best_score = score.value;
-                best_output = result.text;
+                best_output = result.text.to_string();
             }
 
             // Early exit if perfect score

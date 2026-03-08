@@ -33,6 +33,7 @@ hex = { workspace = true }
 similar = { workspace = true }
 minijinja = { workspace = true }
 lru = { workspace = true }
+pin-project-lite = "0.2"
 bincode = { workspace = true }
 tracing = { workspace = true, optional = true }
 
@@ -48,6 +49,7 @@ console = { workspace = true, optional = true }
 duckdb = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
+zstd = { workspace = true, optional = true }
 
 # Tokenization (optional)
 tiktoken-rs = { workspace = true, optional = true }
@@ -78,7 +80,7 @@ native = ["tokio", "tokio-stream", "memmap2", "rayon", "console"]
 # WASM support (minimal async runtime, no networking/threading)
 wasm = []
 # Use system DuckDB (requires: brew install duckdb on macOS)
-storage = ["duckdb", "native", "zip", "sha2"]
+storage = ["duckdb", "native", "zip", "sha2", "zstd"]
 tiktoken = ["tiktoken-rs", "text-splitter"]
 huggingface = ["tokenizers", "text-splitter"]
 chunking = ["text-splitter"]

@@ -7,6 +7,7 @@
 
 use pyo3::prelude::*;
 
+use crate::error::IntoPyResult;
 use kkachi::recursive::{memory, Memory, Recall, RefineResult};
 
 /// Result from a refinement operation.
@@ -122,27 +123,29 @@ impl PyMemory {
     }
 
     /// Add a document to the store.
-    fn add(&mut self, content: String) -> String {
-        self.inner.add(&content)
+    fn add(&mut self, content: String) -> PyResult<String> {
+        self.inner.add(&content).into_py()
     }
 
     /// Add a document with a specific ID.
-    fn add_with_id(&mut self, id: String, content: String) {
-        self.inner.add_with_id(id, &content);
+    fn add_with_id(&mut self, id: String, content: String) -> PyResult<()> {
+        self.inner.add_with_id(id, &content).into_py()
     }
 
     /// Add a document with a tag.
-    fn add_tagged(&mut self, tag: String, content: String) -> String {
-        self.inner.add_tagged(&tag, &content)
+    fn add_tagged(&mut self, tag: String, content: String) -> PyResult<String> {
+        self.inner.add_tagged(&tag, &content).into_py()
     }
 
     /// Search by text query.
-    fn search(&self, query: &str, k: usize) -> Vec<PyRecall> {
-        self.inner
+    fn search(&self, query: &str, k: usize) -> PyResult<Vec<PyRecall>> {
+        Ok(self
+            .inner
             .search(query, k)
+            .into_py()?
             .into_iter()
             .map(|r| r.into())
-            .collect()
+            .collect())
     }
 
     /// Get a document by ID.
@@ -151,115 +154,104 @@ impl PyMemory {
     }
 
     /// Remove a document by ID.
-    fn remove(&mut self, id: &str) -> bool {
-        self.inner.remove(id)
+    fn remove(&mut self, id: &str) -> PyResult<bool> {
+        self.inner.remove(id).into_py()
     }
 
     /// Update an existing document's content.
-    ///
-    /// Args:
-    ///     id (str): Document ID to update
-    ///     content (str): New content for the document
-    ///
-    /// Returns:
-    ///     bool: True if document was found and updated, False otherwise
-    ///
-    /// Example:
-    ///     ```python
-    ///     from kkachi import Memory
-    ///
-    ///     mem = Memory()
-    ///     doc_id = mem.add("Old content")
-    ///     success = mem.update(doc_id, "New content")
-    ///     assert mem.get(doc_id) == "New content"
-    ///     ```
-    fn update(&mut self, id: String, content: String) -> bool {
-        self.inner.update(&id, &content)
+    fn update(&mut self, id: String, content: String) -> PyResult<bool> {
+        self.inner.update(&id, &content).into_py()
+    }
+
+    /// Insert or update a document by content hash.
+    fn upsert(&mut self, content: String) -> PyResult<String> {
+        self.inner.upsert(&content).into_py()
+    }
+
+    /// Insert or update a tagged document by content hash.
+    fn upsert_tagged(&mut self, tag: String, content: String) -> PyResult<String> {
+        self.inner.upsert_tagged(&tag, &content).into_py()
+    }
+
+    /// Search with MMR for diverse results.
+    #[pyo3(signature = (query, k, lambda_=0.5))]
+    fn search_diverse(&self, query: &str, k: usize, lambda_: f64) -> PyResult<Vec<PyRecall>> {
+        Ok(self
+            .inner
+            .search_diverse(query, k, lambda_)
+            .into_py()?
+            .into_iter()
+            .map(|r| r.into())
+            .collect())
+    }
+
+    /// Search filtering by minimum similarity score.
+    fn search_above(&self, query: &str, k: usize, min_score: f64) -> PyResult<Vec<PyRecall>> {
+        Ok(self
+            .inner
+            .search_above(query, k, min_score)
+            .into_py()?
+            .into_iter()
+            .map(|r| r.into())
+            .collect())
+    }
+
+    /// Learn from a successful refinement (write-back).
+    fn learn(&mut self, question: &str, output: &str, score: f64) -> PyResult<()> {
+        self.inner.learn(question, output, score).into_py()
+    }
+
+    /// Enable learning above a score threshold (fluent).
+    fn learn_above(mut self_: PyRefMut<'_, Self>, threshold: f64) -> Py<Self> {
+        self_.inner = std::mem::replace(&mut self_.inner, memory()).learn_above(threshold);
+        self_.into()
+    }
+
+    /// Enable MMR diversity (fluent).
+    fn diversity(mut self_: PyRefMut<'_, Self>, lambda_: f64) -> Py<Self> {
+        self_.inner = std::mem::replace(&mut self_.inner, memory()).diversity(lambda_);
+        self_.into()
     }
 
     /// Get the number of documents.
-    fn __len__(&self) -> usize {
-        self.inner.len()
+    fn __len__(&self) -> PyResult<usize> {
+        self.inner.len().into_py()
     }
 
     /// Check if empty.
-    fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+    fn is_empty(&self) -> PyResult<bool> {
+        self.inner.is_empty().into_py()
     }
 
     /// Get all tags in the store.
-    fn tags(&self) -> Vec<String> {
-        self.inner.tags()
+    fn tags(&self) -> PyResult<Vec<String>> {
+        self.inner.tags().into_py()
     }
 
     /// List all entries in the store.
-    fn list(&self) -> Vec<PyRecall> {
-        self.inner
+    fn list(&self) -> PyResult<Vec<PyRecall>> {
+        Ok(self
+            .inner
             .all()
+            .into_py()?
             .into_iter()
-            .map(|r| PyRecall {
-                id: r.id.to_string(),
-                content: r.content.to_string(),
-                score: r.score,
-                tag: r.tag.map(|t| t.to_string()),
-            })
-            .collect()
+            .map(|r| r.into())
+            .collect())
     }
 
     /// Enable persistent storage using DuckDB.
-    ///
-    /// Args:
-    ///     path (str): Path to the DuckDB database file (e.g., "./memory.db")
-    ///
-    /// Returns:
-    ///     Memory: Self with persistent storage enabled
-    ///
-    /// Raises:
-    ///     RuntimeError: If storage initialization fails
-    ///
-    /// Example:
-    ///     ```python
-    ///     from kkachi import Memory
-    ///
-    ///     mem = Memory().persist("./my_knowledge.db")
-    ///     mem.add("Important document")
-    ///     # Data persists across program restarts
-    ///     ```
-    ///
-    /// Note:
-    ///     Requires the 'storage' feature to be enabled. The database file
-    ///     will be created if it doesn't exist.
     #[cfg(feature = "storage")]
     fn persist(mut self_: PyRefMut<'_, Self>, path: String) -> PyResult<Py<Self>> {
-        use pyo3::exceptions::PyRuntimeError;
-
         let new_inner = std::mem::replace(&mut self_.inner, memory())
             .persist(&path)
-            .map_err(|e| {
-                PyRuntimeError::new_err(format!("Failed to enable persistent storage: {}", e))
-            })?;
-
+            .into_py()?;
         self_.inner = new_inner;
-
         Ok(self_.into())
     }
 
     /// Package the persistent memory into a pip-installable wheel.
-    ///
-    /// Args:
-    ///     name (str): Package name (e.g., "my_kb")
-    ///     version (str): Package version (default "0.1.0")
-    ///     output_dir (str): Output directory (default ".")
-    ///     description (str): Package description
-    ///     author (str): Package author
-    ///
-    /// Returns:
-    ///     PackageResult: Details about the generated wheel
-    ///
-    /// Raises:
-    ///     RuntimeError: If memory is not persistent or packaging fails
     #[cfg(feature = "storage")]
-    #[pyo3(signature = (name, version="0.1.0", output_dir=".", description="Kkachi knowledge base", author=""))]
+    #[pyo3(signature = (name, version="0.1.0", output_dir=".", description="Kkachi knowledge base", author="", compress=true))]
     fn package(
         &self,
         name: &str,
@@ -267,21 +259,17 @@ impl PyMemory {
         output_dir: &str,
         description: &str,
         author: &str,
+        compress: bool,
     ) -> PyResult<PyPackageResult> {
-        use pyo3::exceptions::PyRuntimeError;
-
-        let builder = self
-            .inner
-            .package(name)
-            .map_err(|e| PyRuntimeError::new_err(format!("{}", e)))?;
-
+        let builder = self.inner.package(name).into_py()?;
         let result = builder
             .version_owned(version.to_string())
             .output_dir_owned(std::path::PathBuf::from(output_dir))
             .description_owned(description.to_string())
             .author_owned(author.to_string())
+            .compress(compress)
             .build()
-            .map_err(|e| PyRuntimeError::new_err(format!("{}", e)))?;
+            .into_py()?;
 
         Ok(PyPackageResult {
             wheel_path: result.wheel_path.display().to_string(),
@@ -289,11 +277,19 @@ impl PyMemory {
             size_bytes: result.size_bytes,
             db_size_bytes: result.db_size_bytes,
             file_count: result.file_count,
+            compressed: result.compressed,
+            compression_ratio: result.compression_ratio,
         })
     }
 
-    fn __repr__(&self) -> String {
-        format!("Memory(len={})", self.inner.len())
+    /// Get the database path if using persistent storage.
+    #[cfg(feature = "storage")]
+    fn db_path(&self) -> Option<String> {
+        self.inner.db_path().map(|s| s.to_string())
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("Memory(len={})", self.inner.len().into_py()?))
     }
 }
 
@@ -326,6 +322,12 @@ pub struct PyPackageResult {
     /// Number of files in the wheel.
     #[pyo3(get)]
     pub file_count: usize,
+    /// Whether the DB was zstd-compressed.
+    #[pyo3(get)]
+    pub compressed: bool,
+    /// Compression ratio (compressed/original). 1.0 if not compressed.
+    #[pyo3(get)]
+    pub compression_ratio: f64,
 }
 
 #[pymethods]

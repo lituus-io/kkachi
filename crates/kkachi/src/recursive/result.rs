@@ -513,7 +513,7 @@ impl<L: Llm, V: Validate> Compiled<L, V> {
 
         // Generate
         match self.llm.generate(input, &context, None).await {
-            Ok(output) => output.text,
+            Ok(output) => output.text.to_string(),
             Err(_) => String::new(),
         }
     }

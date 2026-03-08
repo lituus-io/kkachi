@@ -50,7 +50,7 @@ def test_memory_persist_search():
 
 def test_memory_persist_error_invalid_path():
     """Test error handling for invalid database path."""
-    with pytest.raises(RuntimeError, match="Failed to enable persistent storage"):
+    with pytest.raises(RuntimeError, match="Storage error"):
         Memory().persist("/invalid/path/that/does/not/exist/db.db")
 
 

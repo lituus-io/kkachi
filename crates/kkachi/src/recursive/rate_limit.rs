@@ -21,7 +21,7 @@ use crate::error::Result;
 use crate::recursive::llm::{Llm, LmOutput};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -108,24 +108,6 @@ impl TokenBucketState {
     }
 }
 
-/// Shared token bucket handle.
-#[derive(Debug, Clone)]
-struct TokenBucket {
-    state: Arc<Mutex<TokenBucketState>>,
-}
-
-impl TokenBucket {
-    fn new(config: &RateLimitConfig) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(TokenBucketState::new(config))),
-        }
-    }
-
-    fn try_acquire(&self) -> Option<Duration> {
-        self.state.lock().unwrap().try_acquire()
-    }
-}
-
 /// An LLM wrapper that proactively rate-limits requests using a token bucket.
 ///
 /// Before each `generate()` call, the wrapper checks if a token is available.
@@ -143,14 +125,14 @@ impl TokenBucket {
 /// ```
 pub struct RateLimitedLlm<L: Llm> {
     inner: L,
-    bucket: TokenBucket,
+    state: Mutex<TokenBucketState>,
 }
 
 impl<L: Llm> RateLimitedLlm<L> {
     /// Create a new RateLimitedLlm with the given config.
     pub fn new(inner: L, config: RateLimitConfig) -> Self {
         Self {
-            bucket: TokenBucket::new(&config),
+            state: Mutex::new(TokenBucketState::new(&config)),
             inner,
         }
     }
@@ -182,7 +164,7 @@ pub struct RateLimitFut<'a, L: Llm + 'a> {
     prompt: &'a str,
     context: &'a str,
     feedback: Option<&'a str>,
-    bucket: TokenBucket,
+    bucket: &'a Mutex<TokenBucketState>,
     state: RateLimitState<'a, L>,
 }
 
@@ -203,7 +185,7 @@ impl<'a, L: Llm + 'a> Future for RateLimitFut<'a, L> {
             match &mut this.state {
                 #[cfg(feature = "native")]
                 RateLimitState::WaitingForSlot(sleep) => match sleep.as_mut().poll(cx) {
-                    Poll::Ready(()) => match this.bucket.try_acquire() {
+                    Poll::Ready(()) => match this.bucket.lock().unwrap().try_acquire() {
                         None => {
                             let fut = this.llm.generate(this.prompt, this.context, this.feedback);
                             this.state = RateLimitState::Generating(Box::pin(fut));
@@ -218,7 +200,7 @@ impl<'a, L: Llm + 'a> Future for RateLimitFut<'a, L> {
                 #[cfg(not(feature = "native"))]
                 RateLimitState::WaitingForSlot(start, duration) => {
                     if start.elapsed() >= *duration {
-                        match this.bucket.try_acquire() {
+                        match this.bucket.lock().unwrap().try_acquire() {
                             None => {
                                 let fut =
                                     this.llm.generate(this.prompt, this.context, this.feedback);
@@ -256,7 +238,7 @@ impl<L: Llm> Llm for RateLimitedLlm<L> {
         context: &'a str,
         feedback: Option<&'a str>,
     ) -> Self::GenerateFut<'a> {
-        match self.bucket.try_acquire() {
+        match self.state.lock().unwrap().try_acquire() {
             None => {
                 // Token available — go directly to Generating
                 let fut = self.inner.generate(prompt, context, feedback);
@@ -265,7 +247,7 @@ impl<L: Llm> Llm for RateLimitedLlm<L> {
                     prompt,
                     context,
                     feedback,
-                    bucket: self.bucket.clone(),
+                    bucket: &self.state,
                     state: RateLimitState::Generating(Box::pin(fut)),
                 }
             }
@@ -280,7 +262,7 @@ impl<L: Llm> Llm for RateLimitedLlm<L> {
                     prompt,
                     context,
                     feedback,
-                    bucket: self.bucket.clone(),
+                    bucket: &self.state,
                     state,
                 }
             }
@@ -335,21 +317,21 @@ mod tests {
 
     #[test]
     fn test_token_bucket_immediate_acquire() {
-        let bucket = TokenBucket::new(&RateLimitConfig::new(10.0).with_burst(5));
+        let mut state = TokenBucketState::new(&RateLimitConfig::new(10.0).with_burst(5));
         for _ in 0..5 {
-            assert!(bucket.try_acquire().is_none());
+            assert!(state.try_acquire().is_none());
         }
         // 6th should require waiting
-        assert!(bucket.try_acquire().is_some());
+        assert!(state.try_acquire().is_some());
     }
 
     #[test]
     fn test_token_bucket_refill() {
-        let bucket = TokenBucket::new(&RateLimitConfig::new(1000.0).with_burst(1));
+        let mut state = TokenBucketState::new(&RateLimitConfig::new(1000.0).with_burst(1));
         // Consume the one token
-        assert!(bucket.try_acquire().is_none());
+        assert!(state.try_acquire().is_none());
         // Next should require wait
-        let wait = bucket.try_acquire();
+        let wait = state.try_acquire();
         assert!(wait.is_some());
         // Wait should be approximately 1ms (1/1000s)
         let w = wait.unwrap();
@@ -432,7 +414,7 @@ mod tests {
 
         let result = llm.generate("test", "", None).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().text, "ok");
+        assert_eq!(&*result.unwrap().text, "ok");
     }
 
     #[test]

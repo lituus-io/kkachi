@@ -682,7 +682,7 @@ pub async fn refine_pareto<L: crate::recursive::llm::Llm, V: MultiObjectiveValid
         let output = match llm.generate(&effective_prompt, "", None).await {
             Ok(o) => {
                 total_tokens += o.total_tokens();
-                o.text
+                o.text.to_string()
             }
             Err(_) => continue,
         };

@@ -14,16 +14,17 @@
 //! use kkachi::recursive::memory;
 //!
 //! let mut mem = memory();
-//! mem.add("Q: How to parse JSON in Rust? A: Use serde_json::from_str()");
+//! mem.add("Q: How to parse JSON in Rust? A: Use serde_json::from_str()").unwrap();
 //!
-//! let results = mem.search("parsing JSON", 3);
+//! let results = mem.search("parsing JSON", 3).unwrap();
 //! ```
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 #[cfg(feature = "storage")]
-use crate::error::{Error, Result};
+use crate::error::Error;
+use crate::error::Result;
 
 #[cfg(feature = "storage")]
 use crate::recursive::db::Connection;
@@ -420,6 +421,222 @@ enum MemoryStore {
     },
 }
 
+/// Compute a deterministic content-hash ID for upsert operations.
+fn content_hash_id(content: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    format!("upsert:{:016x}", hasher.finish())
+}
+
+impl MemoryStore {
+    /// Insert a document with the given ID. Replaces any existing document with the same ID.
+    fn insert(
+        &mut self,
+        id: &str,
+        content: &str,
+        embedding: &[f32],
+        tag: Option<&str>,
+    ) -> Result<()> {
+        match self {
+            MemoryStore::InMemory(store) => {
+                store.add_with_id(
+                    id.to_string(),
+                    content.to_string(),
+                    embedding.to_vec(),
+                    tag.map(|t| t.to_string()),
+                );
+                Ok(())
+            }
+            #[cfg(feature = "storage")]
+            MemoryStore::Persistent { conn, .. } => {
+                let embedding_bytes = embedding_to_bytes(embedding);
+                conn.execute(
+                    "INSERT OR REPLACE INTO documents (id, content, embedding, tag) VALUES (?, ?, ?, ?)",
+                    duckdb::params![id, content, &embedding_bytes, &tag],
+                )
+                .map_err(|e| Error::memory("insert", e.to_string(), "Ensure the database file is not locked by another process and has write permissions."))?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Add a document with an auto-generated ID.
+    fn add(&mut self, content: &str, embedding: &[f32], tag: Option<&str>) -> Result<String> {
+        match self {
+            MemoryStore::InMemory(store) => Ok(store.add(
+                content.to_string(),
+                embedding.to_vec(),
+                tag.map(|t| t.to_string()),
+            )),
+            #[cfg(feature = "storage")]
+            MemoryStore::Persistent { conn, .. } => {
+                let id = format!("doc:{}", uuid_v4());
+                let embedding_bytes = embedding_to_bytes(embedding);
+                conn.execute(
+                    "INSERT OR REPLACE INTO documents (id, content, embedding, tag) VALUES (?, ?, ?, ?)",
+                    duckdb::params![&id, content, &embedding_bytes, &tag],
+                )
+                .map_err(|e| Error::memory("add", e.to_string(), "Ensure the database file is not locked by another process and has write permissions."))?;
+                Ok(id)
+            }
+        }
+    }
+
+    /// Fetch all documents with their embeddings (for MMR search).
+    fn fetch_all_with_embeddings(&self) -> Result<Vec<(String, String, Vec<f32>, Option<String>)>> {
+        match self {
+            MemoryStore::InMemory(store) => Ok(store
+                .documents
+                .iter()
+                .map(|d| {
+                    (
+                        d.id.clone(),
+                        d.content.clone(),
+                        d.embedding.clone(),
+                        d.tag.clone(),
+                    )
+                })
+                .collect()),
+            #[cfg(feature = "storage")]
+            MemoryStore::Persistent {
+                conn, dimension, ..
+            } => {
+                let mut stmt = conn
+                    .prepare("SELECT id, content, embedding, tag FROM documents")
+                    .map_err(|e| {
+                        Error::memory("search", e.to_string(), "Check database integrity.")
+                    })?;
+                Ok(stmt
+                    .query_map([], |row| {
+                        let id: String = row.get(0)?;
+                        let content: String = row.get(1)?;
+                        let embedding_bytes: Vec<u8> = row.get(2)?;
+                        let tag: Option<String> = row.get(3)?;
+                        let embedding = bytes_to_embedding(&embedding_bytes, *dimension);
+                        Ok((id, content, embedding, tag))
+                    })
+                    .map_err(|e| {
+                        Error::memory("search", e.to_string(), "Check database integrity.")
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect())
+            }
+        }
+    }
+
+    fn update_doc(&mut self, id: &str, content: &str, embedding: &[f32]) -> Result<bool> {
+        match self {
+            MemoryStore::InMemory(store) => {
+                Ok(store.update(id, content.to_string(), embedding.to_vec()))
+            }
+            #[cfg(feature = "storage")]
+            MemoryStore::Persistent { conn, .. } => {
+                let embedding_bytes = embedding_to_bytes(embedding);
+                conn.execute(
+                    "UPDATE documents SET content = ?, embedding = ? WHERE id = ?",
+                    duckdb::params![content, &embedding_bytes, id],
+                )
+                .map(|n| n > 0)
+                .map_err(|e| {
+                    Error::memory(
+                        "update",
+                        e.to_string(),
+                        "The document may have been removed concurrently.",
+                    )
+                })
+            }
+        }
+    }
+
+    fn remove_doc(&mut self, id: &str) -> Result<bool> {
+        match self {
+            MemoryStore::InMemory(store) => Ok(store.remove(id)),
+            #[cfg(feature = "storage")]
+            MemoryStore::Persistent { conn, .. } => conn
+                .execute("DELETE FROM documents WHERE id = ?", [id])
+                .map(|n| n > 0)
+                .map_err(|e| {
+                    Error::memory("remove", e.to_string(), "Ensure the database is writable.")
+                }),
+        }
+    }
+
+    fn all_docs(&self) -> Result<Vec<Recall>> {
+        match self {
+            MemoryStore::InMemory(store) => Ok(store.all()),
+            #[cfg(feature = "storage")]
+            MemoryStore::Persistent { conn, .. } => {
+                let mut stmt = conn
+                    .prepare("SELECT id, content, tag FROM documents")
+                    .map_err(|e| {
+                        Error::memory("all", e.to_string(), "Check database integrity.")
+                    })?;
+                Ok(stmt
+                    .query_map([], |row| {
+                        Ok(Recall {
+                            id: row.get(0)?,
+                            content: row.get(1)?,
+                            score: 1.0,
+                            tag: row.get(2)?,
+                        })
+                    })
+                    .map_err(|e| Error::memory("all", e.to_string(), "Check database integrity."))?
+                    .filter_map(|r| r.ok())
+                    .collect())
+            }
+        }
+    }
+
+    fn count(&self) -> Result<usize> {
+        match self {
+            MemoryStore::InMemory(store) => Ok(store.len()),
+            #[cfg(feature = "storage")]
+            MemoryStore::Persistent { conn, .. } => {
+                let mut stmt = conn
+                    .prepare("SELECT COUNT(*) FROM documents")
+                    .map_err(|e| {
+                        Error::memory(
+                            "len",
+                            e.to_string(),
+                            "The database may be corrupt; try recreating it.",
+                        )
+                    })?;
+                let count = stmt
+                    .query_row([], |row| row.get::<_, i64>(0))
+                    .map_err(|e| {
+                        Error::memory(
+                            "len",
+                            e.to_string(),
+                            "The database may be corrupt; try recreating it.",
+                        )
+                    })?;
+                Ok(count as usize)
+            }
+        }
+    }
+
+    fn unique_tags(&self) -> Result<Vec<String>> {
+        match self {
+            MemoryStore::InMemory(store) => Ok(store.tags()),
+            #[cfg(feature = "storage")]
+            MemoryStore::Persistent { conn, .. } => {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT DISTINCT tag FROM documents WHERE tag IS NOT NULL ORDER BY tag",
+                    )
+                    .map_err(|e| {
+                        Error::memory("tags", e.to_string(), "Check database integrity.")
+                    })?;
+                Ok(stmt
+                    .query_map([], |row| row.get(0))
+                    .map_err(|e| Error::memory("tags", e.to_string(), "Check database integrity."))?
+                    .filter_map(|r| r.ok())
+                    .collect())
+            }
+        }
+    }
+}
+
 /// Memory storage for RAG (Retrieval-Augmented Generation).
 ///
 /// Provides semantic search over stored documents. Can be in-memory
@@ -553,79 +770,49 @@ impl<E: Embedder> Memory<E> {
     }
 
     /// Seed the memory with initial examples if it's empty.
-    pub fn seed_if_empty<I, S1, S2>(mut self, items: I) -> Self
+    pub fn seed_if_empty<I, S1, S2>(mut self, items: I) -> Result<Self>
     where
         I: IntoIterator<Item = (S1, S2)>,
         S1: Into<String>,
         S2: Into<String>,
     {
-        if self.is_empty() {
+        if self.is_empty()? {
             for (question, answer) in items {
                 let content = format!("Q: {}\nA: {}", question.into(), answer.into());
-                self.add(&content);
+                self.add(&content)?;
             }
         }
-        self
+        Ok(self)
+    }
+
+    /// Internal: embed content and insert into the store.
+    /// If `id` is None, an auto-generated ID is used.
+    fn insert_doc(&mut self, id: Option<&str>, content: &str, tag: Option<&str>) -> Result<String> {
+        let embedding = self.embedder.embed(content);
+        match id {
+            Some(id) => {
+                self.store.insert(id, content, &embedding, tag)?;
+                Ok(id.to_string())
+            }
+            None => self.store.add(content, &embedding, tag),
+        }
     }
 
     /// Add a document to memory.
-    pub fn add(&mut self, content: &str) -> String {
-        let embedding = self.embedder.embed(content);
-        match &mut self.store {
-            MemoryStore::InMemory(store) => store.add(content.to_string(), embedding, None),
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => {
-                let id = format!("doc:{}", uuid_v4());
-                let embedding_bytes = embedding_to_bytes(&embedding);
-                conn.execute(
-                    "INSERT OR REPLACE INTO documents (id, content, embedding, tag) VALUES (?, ?, ?, NULL)",
-                    duckdb::params![&id, content, &embedding_bytes],
-                )
-                .ok();
-                id
-            }
-        }
+    pub fn add(&mut self, content: &str) -> Result<String> {
+        self.insert_doc(None, content, None)
     }
 
     /// Add a document with a custom ID.
-    pub fn add_with_id(&mut self, id: impl Into<String>, content: &str) {
-        let embedding = self.embedder.embed(content);
+    pub fn add_with_id(&mut self, id: impl Into<String>, content: &str) -> Result<()> {
         let id = id.into();
-        match &mut self.store {
-            MemoryStore::InMemory(store) => {
-                store.add_with_id(id, content.to_string(), embedding, None)
-            }
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => {
-                let embedding_bytes = embedding_to_bytes(&embedding);
-                conn.execute(
-                    "INSERT OR REPLACE INTO documents (id, content, embedding, tag) VALUES (?, ?, ?, NULL)",
-                    duckdb::params![&id, content, &embedding_bytes],
-                )
-                .ok();
-            }
-        }
+        let embedding = self.embedder.embed(content);
+        self.store.insert(&id, content, &embedding, None)
     }
 
     /// Add a tagged document to memory.
-    pub fn add_tagged(&mut self, tag: &str, content: &str) -> String {
-        let embedding = self.embedder.embed(content);
-        match &mut self.store {
-            MemoryStore::InMemory(store) => {
-                store.add(content.to_string(), embedding, Some(tag.to_string()))
-            }
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => {
-                let id = format!("doc:{}", uuid_v4());
-                let embedding_bytes = embedding_to_bytes(&embedding);
-                conn.execute(
-                    "INSERT OR REPLACE INTO documents (id, content, embedding, tag) VALUES (?, ?, ?, ?)",
-                    duckdb::params![&id, content, &embedding_bytes, tag],
-                )
-                .ok();
-                id
-            }
-        }
+    pub fn add_tagged(&mut self, tag: &str, content: &str) -> Result<String> {
+        self.insert_doc(None, content, Some(tag))
     }
 
     /// Get a document by ID.
@@ -646,7 +833,7 @@ impl<E: Embedder> Memory<E> {
     ///
     /// If `diversity()` was called on this Memory, MMR will be used automatically.
     /// Otherwise, standard cosine similarity ranking is used.
-    pub fn search(&self, query: &str, k: usize) -> Vec<Recall> {
+    pub fn search(&self, query: &str, k: usize) -> Result<Vec<Recall>> {
         // Use MMR if diversity is enabled
         if let Some(lambda) = self.mmr_lambda {
             return self.search_diverse(query, k, lambda);
@@ -654,49 +841,37 @@ impl<E: Embedder> Memory<E> {
 
         let query_embedding = self.embedder.embed(query);
         match &self.store {
-            MemoryStore::InMemory(store) => store.search(&query_embedding, k),
+            // Fast path for in-memory: use InMemoryStore's optimized search
+            MemoryStore::InMemory(store) => Ok(store.search(&query_embedding, k)),
+            // Generic path via fetch_all_with_embeddings (persistent storage)
             #[cfg(feature = "storage")]
-            MemoryStore::Persistent {
-                conn, dimension, ..
-            } => {
-                // For DuckDB, we need to fetch all and sort in Rust
-                // (DuckDB doesn't have built-in vector similarity)
-                let mut stmt = conn
-                    .prepare("SELECT id, content, embedding, tag FROM documents")
-                    .unwrap();
-
-                let mut results: Vec<Recall> = stmt
-                    .query_map([], |row| {
-                        let id: String = row.get(0)?;
-                        let content: String = row.get(1)?;
-                        let embedding_bytes: Vec<u8> = row.get(2)?;
-                        let tag: Option<String> = row.get(3)?;
-                        let embedding = bytes_to_embedding(&embedding_bytes, *dimension);
+            _ => {
+                let all = self.store.fetch_all_with_embeddings()?;
+                let mut results: Vec<Recall> = all
+                    .into_iter()
+                    .map(|(id, content, embedding, tag)| {
                         let score = cosine_similarity(&query_embedding, &embedding);
-                        Ok(Recall {
+                        Recall {
                             id,
                             content,
                             score,
                             tag,
-                        })
+                        }
                     })
-                    .unwrap()
-                    .filter_map(|r| r.ok())
                     .collect();
-
                 results.sort_by(|a, b| {
                     b.score
                         .partial_cmp(&a.score)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
                 results.truncate(k);
-                results
+                Ok(results)
             }
         }
     }
 
     /// Search using the configured k value.
-    pub fn search_default(&self, query: &str) -> Vec<Recall> {
+    pub fn search_default(&self, query: &str) -> Result<Vec<Recall>> {
         self.search(query, self.k)
     }
 
@@ -716,108 +891,30 @@ impl<E: Embedder> Memory<E> {
     /// use kkachi::recursive::memory;
     ///
     /// let mut mem = memory();
-    /// mem.add("Document about Rust");
-    /// mem.add("Another Rust document");
-    /// mem.add("Python programming guide");
+    /// mem.add("Document about Rust").unwrap();
+    /// mem.add("Another Rust document").unwrap();
+    /// mem.add("Python programming guide").unwrap();
     ///
     /// // Get diverse results
-    /// let results = mem.search_diverse("programming languages", 3, 0.5);
+    /// let results = mem.search_diverse("programming languages", 3, 0.5).unwrap();
     /// ```
-    pub fn search_diverse(&self, query: &str, k: usize, lambda: f64) -> Vec<Recall> {
-        match &self.store {
-            MemoryStore::InMemory(store) => {
-                let query_embedding = self.embedder.embed(query);
-                self.mmr_search_in_memory(store, &query_embedding, k, lambda)
-            }
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent {
-                conn, dimension, ..
-            } => {
-                let query_embedding = self.embedder.embed(query);
-                self.mmr_search_persistent(conn, *dimension, &query_embedding, k, lambda)
-            }
-        }
-    }
+    pub fn search_diverse(&self, query: &str, k: usize, lambda: f64) -> Result<Vec<Recall>> {
+        let query_embedding = self.embedder.embed(query);
+        let docs = self.store.fetch_all_with_embeddings()?;
 
-    /// Internal: MMR search for in-memory store.
-    fn mmr_search_in_memory(
-        &self,
-        store: &InMemoryStore,
-        query_embedding: &[f32],
-        k: usize,
-        lambda: f64,
-    ) -> Vec<Recall> {
-        // Get all documents with their embeddings and relevance scores
-        let doc_data: Vec<_> = store
-            .documents
-            .iter()
-            .enumerate()
-            .map(|(idx, doc)| {
-                let relevance = cosine_similarity(query_embedding, &doc.embedding);
-                (idx, doc.embedding.clone(), relevance)
-            })
-            .collect();
-
-        // Apply MMR selection
-        let selected = mmr_select(query_embedding, &doc_data, k, lambda);
-
-        // Convert to Recall objects
-        selected
-            .into_iter()
-            .filter_map(|(idx, score)| {
-                store.documents.get(idx).map(|doc| Recall {
-                    id: doc.id.clone(),
-                    content: doc.content.clone(),
-                    score,
-                    tag: doc.tag.clone(),
-                })
-            })
-            .collect()
-    }
-
-    /// Internal: MMR search for persistent store.
-    #[cfg(feature = "storage")]
-    fn mmr_search_persistent(
-        &self,
-        conn: &Connection,
-        dimension: usize,
-        query_embedding: &[f32],
-        k: usize,
-        lambda: f64,
-    ) -> Vec<Recall> {
-        // Fetch all documents
-        let mut stmt = conn
-            .prepare("SELECT id, content, embedding, tag FROM documents")
-            .unwrap();
-
-        let docs: Vec<_> = stmt
-            .query_map([], |row| {
-                let id: String = row.get(0)?;
-                let content: String = row.get(1)?;
-                let embedding_bytes: Vec<u8> = row.get(2)?;
-                let tag: Option<String> = row.get(3)?;
-                let embedding = bytes_to_embedding(&embedding_bytes, dimension);
-                Ok((id, content, embedding, tag))
-            })
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
-
-        // Build doc_data for MMR
+        // Build doc_data for MMR: (index, embedding, relevance)
         let doc_data: Vec<_> = docs
             .iter()
             .enumerate()
             .map(|(idx, (_, _, emb, _))| {
-                let relevance = cosine_similarity(query_embedding, emb);
+                let relevance = cosine_similarity(&query_embedding, emb);
                 (idx, emb.clone(), relevance)
             })
             .collect();
 
-        // Apply MMR selection
-        let selected = mmr_select(query_embedding, &doc_data, k, lambda);
+        let selected = mmr_select(&query_embedding, &doc_data, k, lambda);
 
-        // Convert to Recall objects
-        selected
+        Ok(selected
             .into_iter()
             .filter_map(|(idx, score)| {
                 docs.get(idx).map(|(id, content, _, tag)| Recall {
@@ -827,25 +924,13 @@ impl<E: Embedder> Memory<E> {
                     tag: tag.clone(),
                 })
             })
-            .collect()
+            .collect())
     }
 
     /// Update an existing document.
-    pub fn update(&mut self, id: &str, content: &str) -> bool {
+    pub fn update(&mut self, id: &str, content: &str) -> Result<bool> {
         let embedding = self.embedder.embed(content);
-        match &mut self.store {
-            MemoryStore::InMemory(store) => store.update(id, content.to_string(), embedding),
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => {
-                let embedding_bytes = embedding_to_bytes(&embedding);
-                conn.execute(
-                    "UPDATE documents SET content = ?, embedding = ? WHERE id = ?",
-                    duckdb::params![content, &embedding_bytes, id],
-                )
-                .map(|n| n > 0)
-                .unwrap_or(false)
-            }
-        }
+        self.store.update_doc(id, content, &embedding)
     }
 
     /// Insert or update a document by content hash.
@@ -854,159 +939,71 @@ impl<E: Embedder> Memory<E> {
     /// Otherwise, a new document is added. Useful for idempotent ingestion.
     ///
     /// Returns the document ID.
-    pub fn upsert(&mut self, content: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        content.hash(&mut hasher);
-        let id = format!("upsert:{:016x}", hasher.finish());
-
+    pub fn upsert(&mut self, content: &str) -> Result<String> {
+        let id = content_hash_id(content);
         let embedding = self.embedder.embed(content);
-        match &mut self.store {
-            MemoryStore::InMemory(store) => {
-                store.add_with_id(id.clone(), content.to_string(), embedding, None);
-            }
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => {
-                let embedding_bytes = embedding_to_bytes(&embedding);
-                conn.execute(
-                    "INSERT OR REPLACE INTO documents (id, content, embedding, tag) VALUES (?, ?, ?, NULL)",
-                    duckdb::params![&id, content, &embedding_bytes],
-                )
-                .ok();
-            }
-        }
-        id
+        self.store.insert(&id, content, &embedding, None)?;
+        Ok(id)
     }
 
     /// Insert or update a tagged document by content hash.
     ///
     /// Same as [`upsert`](Memory::upsert) but also sets a tag.
-    pub fn upsert_tagged(&mut self, tag: &str, content: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        content.hash(&mut hasher);
-        let id = format!("upsert:{:016x}", hasher.finish());
-
+    pub fn upsert_tagged(&mut self, tag: &str, content: &str) -> Result<String> {
+        let id = content_hash_id(content);
         let embedding = self.embedder.embed(content);
-        match &mut self.store {
-            MemoryStore::InMemory(store) => {
-                store.add_with_id(
-                    id.clone(),
-                    content.to_string(),
-                    embedding,
-                    Some(tag.to_string()),
-                );
-            }
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => {
-                let embedding_bytes = embedding_to_bytes(&embedding);
-                conn.execute(
-                    "INSERT OR REPLACE INTO documents (id, content, embedding, tag) VALUES (?, ?, ?, ?)",
-                    duckdb::params![&id, content, &embedding_bytes, tag],
-                )
-                .ok();
-            }
-        }
-        id
+        self.store.insert(&id, content, &embedding, Some(tag))?;
+        Ok(id)
     }
 
     /// Search for similar documents, filtering by minimum similarity score.
     ///
     /// Only returns results with score >= `min_score`.
-    pub fn search_above(&self, query: &str, k: usize, min_score: f64) -> Vec<Recall> {
-        self.search(query, k)
+    pub fn search_above(&self, query: &str, k: usize, min_score: f64) -> Result<Vec<Recall>> {
+        Ok(self
+            .search(query, k)?
             .into_iter()
             .filter(|r| r.score >= min_score)
-            .collect()
+            .collect())
     }
 
     /// Remove a document by ID.
-    pub fn remove(&mut self, id: &str) -> bool {
-        match &mut self.store {
-            MemoryStore::InMemory(store) => store.remove(id),
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => conn
-                .execute("DELETE FROM documents WHERE id = ?", [id])
-                .map(|n| n > 0)
-                .unwrap_or(false),
-        }
+    pub fn remove(&mut self, id: &str) -> Result<bool> {
+        self.store.remove_doc(id)
     }
 
     /// Get all documents.
-    pub fn all(&self) -> Vec<Recall> {
-        match &self.store {
-            MemoryStore::InMemory(store) => store.all(),
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => {
-                let mut stmt = conn
-                    .prepare("SELECT id, content, tag FROM documents")
-                    .unwrap();
-                stmt.query_map([], |row| {
-                    Ok(Recall {
-                        id: row.get(0)?,
-                        content: row.get(1)?,
-                        score: 1.0,
-                        tag: row.get(2)?,
-                    })
-                })
-                .unwrap()
-                .filter_map(|r| r.ok())
-                .collect()
-            }
-        }
+    pub fn all(&self) -> Result<Vec<Recall>> {
+        self.store.all_docs()
     }
 
     /// Get the number of documents.
-    pub fn len(&self) -> usize {
-        match &self.store {
-            MemoryStore::InMemory(store) => store.len(),
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => {
-                let mut stmt = conn.prepare("SELECT COUNT(*) FROM documents").unwrap();
-                stmt.query_row([], |row| row.get::<_, i64>(0)).unwrap_or(0) as usize
-            }
-        }
+    pub fn len(&self) -> Result<usize> {
+        self.store.count()
     }
 
     /// Check if memory is empty.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
+    pub fn is_empty(&self) -> Result<bool> {
+        Ok(self.store.count()? == 0)
     }
 
     /// Get all unique tags.
-    pub fn tags(&self) -> Vec<String> {
-        match &self.store {
-            MemoryStore::InMemory(store) => store.tags(),
-            #[cfg(feature = "storage")]
-            MemoryStore::Persistent { conn, .. } => {
-                let mut stmt = conn
-                    .prepare(
-                        "SELECT DISTINCT tag FROM documents WHERE tag IS NOT NULL ORDER BY tag",
-                    )
-                    .unwrap();
-                stmt.query_map([], |row| row.get(0))
-                    .unwrap()
-                    .filter_map(|r| r.ok())
-                    .collect()
-            }
-        }
+    pub fn tags(&self) -> Result<Vec<String>> {
+        self.store.unique_tags()
     }
 
     /// Learn from a successful refinement (write-back).
     ///
     /// This is called by the refinement loop when a result meets the
     /// learning threshold.
-    pub fn learn(&mut self, question: &str, output: &str, score: f64) {
+    pub fn learn(&mut self, question: &str, output: &str, score: f64) -> Result<()> {
         if let Some(threshold) = self.learn_threshold {
             if score >= threshold {
                 let content = format!("Q: {}\nA: {}", question, output);
-                self.add(&content);
+                self.add(&content)?;
             }
         }
+        Ok(())
     }
 
     /// Get the database path if using persistent storage.
@@ -1818,7 +1815,7 @@ mod tests {
     #[test]
     fn test_memory_add_and_get() {
         let mut mem = memory();
-        let id = mem.add("test content");
+        let id = mem.add("test content").unwrap();
         assert!(mem.get(&id).is_some());
         assert_eq!(mem.get(&id).unwrap(), "test content");
     }
@@ -1826,12 +1823,13 @@ mod tests {
     #[test]
     fn test_memory_search() {
         let mut mem = memory();
-        mem.add("How to parse JSON in Rust? Use serde_json");
-        mem.add("How to read a file? Use std::fs");
-        mem.add("How to make HTTP requests? Use reqwest");
+        mem.add("How to parse JSON in Rust? Use serde_json")
+            .unwrap();
+        mem.add("How to read a file? Use std::fs").unwrap();
+        mem.add("How to make HTTP requests? Use reqwest").unwrap();
 
         // Hash-based embedding works on exact word matches
-        let results = mem.search("parse JSON Rust", 2);
+        let results = mem.search("parse JSON Rust", 2).unwrap();
         assert_eq!(results.len(), 2);
         // The JSON one should be most relevant with exact word match
         assert!(results[0].content.contains("JSON"));
@@ -1840,36 +1838,38 @@ mod tests {
     #[test]
     fn test_memory_update() {
         let mut mem = memory();
-        let id = mem.add("original");
-        assert!(mem.update(&id, "updated"));
+        let id = mem.add("original").unwrap();
+        assert!(mem.update(&id, "updated").unwrap());
         assert_eq!(mem.get(&id).unwrap(), "updated");
     }
 
     #[test]
     fn test_memory_remove() {
         let mut mem = memory();
-        let id = mem.add("to delete");
-        assert!(mem.remove(&id));
+        let id = mem.add("to delete").unwrap();
+        assert!(mem.remove(&id).unwrap());
         assert!(mem.get(&id).is_none());
     }
 
     #[test]
     fn test_memory_tagged() {
         let mut mem = memory();
-        mem.add_tagged("rust", "Rust content");
-        mem.add_tagged("python", "Python content");
+        mem.add_tagged("rust", "Rust content").unwrap();
+        mem.add_tagged("python", "Python content").unwrap();
 
-        let tags = mem.tags();
+        let tags = mem.tags().unwrap();
         assert!(tags.contains(&"rust".to_string()));
         assert!(tags.contains(&"python".to_string()));
     }
 
     #[test]
     fn test_memory_seed_if_empty() {
-        let mem = memory().seed_if_empty([("What is Rust?", "A systems programming language")]);
+        let mem = memory()
+            .seed_if_empty([("What is Rust?", "A systems programming language")])
+            .unwrap();
 
-        assert_eq!(mem.len(), 1);
-        let results = mem.search("Rust", 1);
+        assert_eq!(mem.len().unwrap(), 1);
+        let results = mem.search("Rust", 1).unwrap();
         assert!(!results.is_empty());
     }
 
@@ -1878,33 +1878,33 @@ mod tests {
         let mut mem = memory().learn_above(0.8);
 
         // Below threshold - should not add
-        mem.learn("question", "bad answer", 0.5);
-        assert_eq!(mem.len(), 0);
+        mem.learn("question", "bad answer", 0.5).unwrap();
+        assert_eq!(mem.len().unwrap(), 0);
 
         // Above threshold - should add
-        mem.learn("question", "good answer", 0.9);
-        assert_eq!(mem.len(), 1);
+        mem.learn("question", "good answer", 0.9).unwrap();
+        assert_eq!(mem.len().unwrap(), 1);
     }
 
     #[test]
     fn test_memory_len_and_empty() {
         let mut mem = memory();
-        assert!(mem.is_empty());
-        assert_eq!(mem.len(), 0);
+        assert!(mem.is_empty().unwrap());
+        assert_eq!(mem.len().unwrap(), 0);
 
-        mem.add("doc1");
-        assert!(!mem.is_empty());
-        assert_eq!(mem.len(), 1);
+        mem.add("doc1").unwrap();
+        assert!(!mem.is_empty().unwrap());
+        assert_eq!(mem.len().unwrap(), 1);
     }
 
     #[test]
     fn test_memory_all() {
         let mut mem = memory();
-        mem.add("doc1");
-        mem.add("doc2");
-        mem.add("doc3");
+        mem.add("doc1").unwrap();
+        mem.add("doc2").unwrap();
+        mem.add("doc3").unwrap();
 
-        let all = mem.all();
+        let all = mem.all().unwrap();
         assert_eq!(all.len(), 3);
     }
 
@@ -1975,23 +1975,23 @@ mod tests {
     #[test]
     fn test_memory_diversity() {
         let mut mem = memory().diversity(0.5);
-        mem.add("Document about Rust programming");
-        mem.add("Another document about Rust language");
-        mem.add("Python is great for ML");
+        mem.add("Document about Rust programming").unwrap();
+        mem.add("Another document about Rust language").unwrap();
+        mem.add("Python is great for ML").unwrap();
 
-        let results = mem.search("Rust programming language", 2);
+        let results = mem.search("Rust programming language", 2).unwrap();
         assert_eq!(results.len(), 2);
     }
 
     #[test]
     fn test_memory_search_diverse() {
         let mut mem = memory();
-        mem.add("Rust systems programming");
-        mem.add("Rust memory safety");
-        mem.add("Python data science");
+        mem.add("Rust systems programming").unwrap();
+        mem.add("Rust memory safety").unwrap();
+        mem.add("Python data science").unwrap();
 
         // Explicit diverse search
-        let results = mem.search_diverse("programming language", 2, 0.5);
+        let results = mem.search_diverse("programming language", 2, 0.5).unwrap();
         assert_eq!(results.len(), 2);
     }
 

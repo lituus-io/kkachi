@@ -607,7 +607,7 @@ impl<'a, L: Llm> Pipeline<'a, L> {
                 if let Ok(output) = llm.generate(&prompt, "", None).await {
                     let tokens = output.total_tokens();
                     total_tokens += tokens;
-                    current_output = output.text;
+                    current_output = output.text.to_string();
                     let sr = StepResult {
                         name: "generate".to_string(),
                         input: prompt.to_string(),
@@ -744,7 +744,7 @@ impl<'a, L: Llm> Pipeline<'a, L> {
             if let Ok(output) = llm.generate(&prompt, "", None).await {
                 let tokens = output.total_tokens();
                 total_tokens += tokens;
-                current_output = output.text;
+                current_output = output.text.to_string();
                 step_results.push(StepResult {
                     name: "generate".to_string(),
                     input: prompt.to_string(),
@@ -1122,7 +1122,7 @@ async fn run_branch_steps<L: Llm>(
         // No steps — just do a single LLM generation
         if let Ok(output) = llm.generate(&input, "", None).await {
             total_tokens += output.total_tokens();
-            current_output = output.text;
+            current_output = output.text.to_string();
         }
     }
 

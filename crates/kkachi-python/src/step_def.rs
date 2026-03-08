@@ -468,7 +468,7 @@ impl PyStepDef {
     fn run(&self, input: &str) -> PyResult<PyStepResult> {
         let step = self.node.materialize();
         let output = kkachi::recursive::block_on(step.run_dyn(input))
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(|e| crate::error::KkachiError(e))?;
         Ok(PyStepResult {
             text: output.text,
             score: output.score,
@@ -565,7 +565,7 @@ pub fn py_run_all_steps(
     results
         .into_iter()
         .map(|r| {
-            let output = r.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            let output = r.map_err(|e| crate::error::KkachiError(e))?;
             Ok(PyStepResult {
                 text: output.text,
                 score: output.score,

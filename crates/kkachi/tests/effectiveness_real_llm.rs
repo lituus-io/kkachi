@@ -607,12 +607,16 @@ fn test_composition_all_any() {
 fn test_memory_search() {
     let mut mem: Memory<HashEmbedder> = memory();
 
-    mem.add("Rust is a systems programming language focused on safety");
-    mem.add("Python is great for data science and machine learning");
-    mem.add("JavaScript runs in web browsers and Node.js");
-    mem.add("Go is designed for concurrent programming");
+    mem.add("Rust is a systems programming language focused on safety")
+        .unwrap();
+    mem.add("Python is great for data science and machine learning")
+        .unwrap();
+    mem.add("JavaScript runs in web browsers and Node.js")
+        .unwrap();
+    mem.add("Go is designed for concurrent programming")
+        .unwrap();
 
-    let results = mem.search("memory safe language", 2);
+    let results = mem.search("memory safe language", 2).unwrap();
     println!("[memory] top result: '{}'", results[0].content);
     assert!(
         results[0].content.contains("Rust"),
@@ -625,12 +629,16 @@ fn test_memory_search() {
 fn test_memory_diverse_search() {
     let mut mem: Memory<HashEmbedder> = memory();
 
-    mem.add_tagged("animals", "Cats are independent pets");
-    mem.add_tagged("animals", "Dogs are loyal companions");
-    mem.add_tagged("tech", "Python is a programming language");
-    mem.add_tagged("tech", "Rust ensures memory safety");
+    mem.add_tagged("animals", "Cats are independent pets")
+        .unwrap();
+    mem.add_tagged("animals", "Dogs are loyal companions")
+        .unwrap();
+    mem.add_tagged("tech", "Python is a programming language")
+        .unwrap();
+    mem.add_tagged("tech", "Rust ensures memory safety")
+        .unwrap();
 
-    let results = mem.search_diverse("pets and programming", 3, 0.5);
+    let results = mem.search_diverse("pets and programming", 3, 0.5).unwrap();
     println!("[memory_diverse] found {} results", results.len());
     for r in &results {
         println!("  - '{}'", r.content);

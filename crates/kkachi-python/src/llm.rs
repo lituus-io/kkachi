@@ -14,8 +14,9 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
+use kkachi::recursive::boxed::BoxedLlm;
 use kkachi::recursive::llm::Llm;
-use kkachi::recursive::{ApiLlm, BoxedLlm, CacheExt, LlmExt, RateLimitExt};
+use kkachi::recursive::{ApiLlm, CacheExt, LlmExt, RateLimitExt};
 
 /// Configuration for LLM optimization wrappers.
 ///
@@ -105,48 +106,18 @@ impl PyApiLlm {
             }
         };
 
-        // Build the LLM stack based on config
-        // Order: base -> cache -> rate_limit -> retry (innermost to outermost)
-        //
-        // We use Box::leak to get 'static references for the wrapper chain.
-        // This is acceptable because PyApiLlm lives for the duration of the
-        // Python process (GC'd by Python).
-        // BoxedLlm::new takes L: Llm by value and wraps in Arc internally.
-        // We build the wrapper chain and pass the final type to BoxedLlm::new.
-        match (
-            self.config.cache_capacity,
-            self.config.rate_limit_rps,
-            self.config.max_retries,
-        ) {
-            (None, None, None) => {
-                self.built = Some(BoxedLlm::new(base));
-            }
-            (Some(cap), None, None) => {
-                self.built = Some(BoxedLlm::new(base.with_cache(cap)));
-            }
-            (None, Some(rps), None) => {
-                self.built = Some(BoxedLlm::new(base.with_rate_limit(rps)));
-            }
-            (None, None, Some(retries)) => {
-                self.built = Some(BoxedLlm::new(base.with_retry(retries)));
-            }
-            (Some(cap), Some(rps), None) => {
-                self.built = Some(BoxedLlm::new(base.with_cache(cap).with_rate_limit(rps)));
-            }
-            (Some(cap), None, Some(retries)) => {
-                self.built = Some(BoxedLlm::new(base.with_cache(cap).with_retry(retries)));
-            }
-            (None, Some(rps), Some(retries)) => {
-                self.built = Some(BoxedLlm::new(base.with_rate_limit(rps).with_retry(retries)));
-            }
-            (Some(cap), Some(rps), Some(retries)) => {
-                self.built = Some(BoxedLlm::new(
-                    base.with_cache(cap)
-                        .with_rate_limit(rps)
-                        .with_retry(retries),
-                ));
-            }
+        // Build the LLM stack: base → cache → rate_limit → retry
+        let mut llm = BoxedLlm::new(base);
+        if let Some(cap) = self.config.cache_capacity {
+            llm = BoxedLlm::new(llm.with_cache(cap));
         }
+        if let Some(rps) = self.config.rate_limit_rps {
+            llm = BoxedLlm::new(llm.with_rate_limit(rps));
+        }
+        if let Some(retries) = self.config.max_retries {
+            llm = BoxedLlm::new(llm.with_retry(retries));
+        }
+        self.built = Some(llm);
     }
 
     /// Get a reference to the built LLM for use by DSPy modules.
@@ -171,7 +142,11 @@ impl PyApiLlm {
     #[staticmethod]
     fn from_env() -> PyResult<Self> {
         ApiLlm::from_env().map(Self::new_plain).map_err(|e| {
-            PyRuntimeError::new_err(format!("Failed to create LLM from environment: {}", e))
+            PyRuntimeError::new_err(format!(
+                "No LLM provider found. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, \
+                 or install claude CLI. Error: {}",
+                e
+            ))
         })
     }
 
@@ -274,17 +249,19 @@ impl PyApiLlm {
         feedback: Option<String>,
     ) -> PyResult<String> {
         self.ensure_built();
-        let llm = self
-            .built
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("LLM not initialized"))?;
+        let llm = self.built.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "LLM not initialized. This is a bug — ensure with_cache/with_rate_limit/with_retry \
+                 were called before first use."
+            )
+        })?;
         // Use block_on to run the future with a proper Tokio runtime so that
         // retry (tokio::time::sleep) and rate-limit wrappers work correctly.
         py.allow_threads(|| {
             let result =
                 kkachi::recursive::block_on(llm.generate(&prompt, "", feedback.as_deref()));
             match result {
-                Ok(output) => Ok(output.text),
+                Ok(output) => Ok(output.text.to_string()),
                 Err(e) => Err(PyRuntimeError::new_err(format!("{e}"))),
             }
         })

@@ -69,6 +69,7 @@ pub mod validate;
 pub mod api_client;
 
 // LLM wrappers
+pub mod boxed;
 pub mod cache;
 pub mod rate_limit;
 pub mod retry;
@@ -118,10 +119,11 @@ pub mod template;
 // Re-exports from new modules
 #[cfg(feature = "api")]
 pub use api_client::{ApiLlm, Provider};
+pub use boxed::BoxedLlm;
 pub use checks::{checks, Check, CheckKind, Checks};
 pub use cli::{cli, Cli, CliCapture, CliError, CliTool};
 pub use compose::{all, any, All, And, Any, Not, Or, ValidateExt, Weighted};
-pub use llm::{BoxedLlm, CliLlm, FailingLlm, IterativeMockLlm, Llm, LmOutput, MockLlm};
+pub use llm::{CliLlm, FailingLlm, IterativeMockLlm, Llm, LmOutput, MockLlm};
 
 pub use memory::{
     cosine_similarity, memory, mmr_select, Document, Embedder, HashEmbedder, LinearIndex, Memory,

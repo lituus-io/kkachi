@@ -43,7 +43,7 @@ def test_package_wheel_is_valid_zip(persistent_memory):
     with zipfile.ZipFile(result.wheel_path, "r") as zf:
         names = zf.namelist()
         assert "zip_test/__init__.py" in names
-        assert "zip_test/data/knowledge.db" in names
+        assert "zip_test/data/knowledge.db.zst" in names or "zip_test/data/knowledge.db" in names
         assert "zip_test-0.1.0.dist-info/METADATA" in names
         assert "zip_test-0.1.0.dist-info/WHEEL" in names
         assert "zip_test-0.1.0.dist-info/RECORD" in names
@@ -68,13 +68,13 @@ def test_package_db_integrity(persistent_memory):
     dist_dir = os.path.join(tmpdir, "dist")
     db_path = os.path.join(tmpdir, "test.db")
 
-    result = mem.package("integrity_test", output_dir=dist_dir)
+    result = mem.package("integrity_test", output_dir=dist_dir, compress=False)
 
     # Read the source DB
     with open(db_path, "rb") as f:
         source_bytes = f.read()
 
-    # Read the DB from the wheel
+    # Read the DB from the wheel (uncompressed mode)
     with zipfile.ZipFile(result.wheel_path, "r") as zf:
         wheel_bytes = zf.read("integrity_test/data/knowledge.db")
 

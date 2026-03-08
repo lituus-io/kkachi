@@ -45,6 +45,7 @@ mod checks;
 mod compose;
 mod defaults;
 mod dspy;
+mod error;
 mod evaluate_py;
 mod jinja;
 mod llm;

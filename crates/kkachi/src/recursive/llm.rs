@@ -21,13 +21,16 @@
 
 use crate::error::{Error, Result};
 use std::future::Future;
-use std::pin::Pin;
+use std::sync::Arc;
 
 /// Output from an LLM generation request.
+///
+/// The `text` field uses `Arc<str>` so that cloning (e.g. for caching)
+/// is a single atomic increment — no heap allocation, no string copy.
 #[derive(Debug, Clone)]
 pub struct LmOutput {
     /// The generated text.
-    pub text: String,
+    pub text: Arc<str>,
     /// Number of prompt tokens used.
     pub prompt_tokens: u32,
     /// Number of completion tokens generated.
@@ -36,7 +39,7 @@ pub struct LmOutput {
 
 impl LmOutput {
     /// Create a new LmOutput with just the text.
-    pub fn new(text: impl Into<String>) -> Self {
+    pub fn new(text: impl Into<Arc<str>>) -> Self {
         Self {
             text: text.into(),
             prompt_tokens: 0,
@@ -45,7 +48,7 @@ impl LmOutput {
     }
 
     /// Create a new LmOutput with token counts.
-    pub fn with_tokens(text: impl Into<String>, prompt: u32, completion: u32) -> Self {
+    pub fn with_tokens(text: impl Into<Arc<str>>, prompt: u32, completion: u32) -> Self {
         Self {
             text: text.into(),
             prompt_tokens: prompt,
@@ -269,90 +272,6 @@ impl Llm for FailingLlm {
     }
 }
 
-/// Object-safe erased trait for LLM implementations (internal only).
-///
-/// This bridges the GAT-based [`Llm`] trait to dynamic dispatch by
-/// returning `Pin<Box<dyn Future>>` instead of associated types.
-trait ErasedLlm: Send + Sync {
-    fn generate_erased<'a>(
-        &'a self,
-        prompt: &'a str,
-        context: &'a str,
-        feedback: Option<&'a str>,
-    ) -> Pin<Box<dyn Future<Output = Result<LmOutput>> + Send + 'a>>;
-
-    #[allow(dead_code)]
-    fn model_name_erased(&self) -> &str;
-
-    fn max_context_erased(&self) -> usize;
-}
-
-impl<L: Llm> ErasedLlm for L {
-    fn generate_erased<'a>(
-        &'a self,
-        prompt: &'a str,
-        context: &'a str,
-        feedback: Option<&'a str>,
-    ) -> Pin<Box<dyn Future<Output = Result<LmOutput>> + Send + 'a>> {
-        Box::pin(self.generate(prompt, context, feedback))
-    }
-
-    fn model_name_erased(&self) -> &str {
-        self.model_name()
-    }
-
-    fn max_context_erased(&self) -> usize {
-        self.max_context()
-    }
-}
-
-/// Wrapper for boxed async LLM implementations.
-///
-/// This allows using dynamic dispatch when needed, at the cost of
-/// boxing the future. Use this only when you need runtime polymorphism.
-///
-/// Owns the LLM directly (no `Arc`), stores the model name as an owned
-/// `String` (no `Box::leak`).
-pub struct BoxedLlm {
-    inner: Box<dyn ErasedLlm>,
-    name: String,
-}
-
-impl BoxedLlm {
-    /// Create a new boxed LLM from any Llm implementation.
-    pub fn new<L: Llm + 'static>(llm: L) -> Self {
-        let name = llm.model_name().to_string();
-        Self {
-            inner: Box::new(llm),
-            name,
-        }
-    }
-}
-
-impl Llm for BoxedLlm {
-    type GenerateFut<'a>
-        = Pin<Box<dyn Future<Output = Result<LmOutput>> + Send + 'a>>
-    where
-        Self: 'a;
-
-    fn generate<'a>(
-        &'a self,
-        prompt: &'a str,
-        context: &'a str,
-        feedback: Option<&'a str>,
-    ) -> Self::GenerateFut<'a> {
-        self.inner.generate_erased(prompt, context, feedback)
-    }
-
-    fn model_name(&self) -> &str {
-        &self.name
-    }
-
-    fn max_context(&self) -> usize {
-        self.inner.max_context_erased()
-    }
-}
-
 // ============================================================================
 // CliLlm: Claude Code CLI subprocess (no feature gate)
 // ============================================================================
@@ -507,7 +426,7 @@ mod tests {
         let llm = MockLlm::new(|prompt, _| format!("Response: {}", prompt));
 
         let output = llm.generate("test prompt", "", None).await.unwrap();
-        assert_eq!(output.text, "Response: test prompt");
+        assert_eq!(&*output.text, "Response: test prompt");
     }
 
     #[tokio::test]
@@ -534,13 +453,13 @@ mod tests {
         });
 
         let out1 = llm.generate("test", "", None).await.unwrap();
-        assert_eq!(out1.text, "first try");
+        assert_eq!(&*out1.text, "first try");
 
         let out2 = llm.generate("test", "", Some("improve")).await.unwrap();
-        assert_eq!(out2.text, "second try");
+        assert_eq!(&*out2.text, "second try");
 
         let out3 = llm.generate("test", "", Some("more")).await.unwrap();
-        assert_eq!(out3.text, "final answer");
+        assert_eq!(&*out3.text, "final answer");
     }
 
     #[tokio::test]
@@ -558,7 +477,7 @@ mod tests {
     #[test]
     fn test_lm_output() {
         let output = LmOutput::new("test");
-        assert_eq!(output.text, "test");
+        assert_eq!(&*output.text, "test");
         assert_eq!(output.total_tokens(), 0);
 
         let output = LmOutput::with_tokens("test", 10, 20);

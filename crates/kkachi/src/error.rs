@@ -128,9 +128,19 @@ pub enum Error {
     Utf8(#[from] std::str::Utf8Error),
 
     /// Storage errors (DuckDB, etc.)
-    #[cfg(feature = "storage")]
     #[error("Storage error: {0}")]
     Storage(String),
+
+    /// Memory store errors with actionable context.
+    #[error("Memory error: {operation} failed — {reason}. {suggestion}")]
+    Memory {
+        /// What operation failed.
+        operation: &'static str,
+        /// Why it failed.
+        reason: String,
+        /// What to do about it.
+        suggestion: &'static str,
+    },
 
     /// Parse errors (for template parsing, etc.)
     #[error("Parse error: {0}")]
@@ -155,10 +165,22 @@ pub enum Error {
 }
 
 impl Error {
-    /// Create a storage error
-    #[cfg(feature = "storage")]
+    /// Create a storage error.
     pub fn storage(msg: impl Into<String>) -> Self {
         Self::Storage(msg.into())
+    }
+
+    /// Create a memory error with operation context, reason, and suggestion.
+    pub fn memory(
+        operation: &'static str,
+        reason: impl Into<String>,
+        suggestion: &'static str,
+    ) -> Self {
+        Self::Memory {
+            operation,
+            reason: reason.into(),
+            suggestion,
+        }
     }
 
     /// Create a signature error
@@ -297,8 +319,8 @@ impl Error {
             Self::Io(_) => "io",
             Self::Json(_) => "json",
             Self::Utf8(_) => "utf8",
-            #[cfg(feature = "storage")]
             Self::Storage(_) => "storage",
+            Self::Memory { .. } => "memory",
             Self::Parse(_) => "parse",
             Self::Validation(_) => "validation",
             Self::Optimization(_) => "optimization",

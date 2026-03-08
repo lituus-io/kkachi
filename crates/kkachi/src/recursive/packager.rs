@@ -30,6 +30,42 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// Sanitize a package name per PEP 503/427: strip path components,
+/// replace hyphens/spaces/dots with underscores, remove non-alphanumeric chars.
+fn sanitize_package_name(name: &str) -> Result<String> {
+    // Strip any path traversal components
+    let base = Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(name);
+
+    // Replace hyphens, spaces, dots with underscores; keep only alphanumeric + underscore
+    let sanitized: String = base
+        .chars()
+        .map(|c| match c {
+            '-' | ' ' | '.' => '_',
+            c if c.is_alphanumeric() || c == '_' => c,
+            _ => '_',
+        })
+        .collect();
+
+    // Strip leading/trailing underscores and collapse runs
+    let collapsed: String = sanitized
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+
+    if collapsed.is_empty() {
+        return Err(Error::storage(
+            "Package name is empty or contains only invalid characters. \
+             Provide a valid Python package name (e.g., 'my_knowledge_base').",
+        ));
+    }
+
+    Ok(collapsed)
+}
+
 /// Metadata for the wheel package.
 pub struct PackageMeta<'a> {
     /// Package name.
@@ -47,6 +83,7 @@ pub struct PackagerBuilder<'a> {
     db_path: Cow<'a, Path>,
     meta: PackageMeta<'a>,
     output_dir: Cow<'a, Path>,
+    compress: bool,
 }
 
 /// Result of a successful wheel build.
@@ -62,6 +99,10 @@ pub struct PackageResult {
     pub db_size_bytes: u64,
     /// Number of files in the wheel.
     pub file_count: usize,
+    /// Whether the DB was zstd-compressed.
+    pub compressed: bool,
+    /// Compression ratio (compressed/original). 1.0 if not compressed.
+    pub compression_ratio: f64,
 }
 
 impl<'a> PackagerBuilder<'a> {
@@ -76,12 +117,13 @@ impl<'a> PackagerBuilder<'a> {
                 author: Cow::Borrowed(""),
             },
             output_dir: Cow::Borrowed(Path::new(".")),
+            compress: true,
         }
     }
 
-    /// Set the package name.
-    pub fn name(mut self, name: &'a str) -> Self {
-        self.meta.name = Cow::Borrowed(name);
+    /// Set the package name (`&str` borrows, `String` moves).
+    pub fn name(mut self, name: impl Into<Cow<'a, str>>) -> Self {
+        self.meta.name = name.into();
         self
     }
 
@@ -91,9 +133,9 @@ impl<'a> PackagerBuilder<'a> {
         self
     }
 
-    /// Set the package version.
-    pub fn version(mut self, version: &'a str) -> Self {
-        self.meta.version = Cow::Borrowed(version);
+    /// Set the package version (`&str` borrows, `String` moves).
+    pub fn version(mut self, version: impl Into<Cow<'a, str>>) -> Self {
+        self.meta.version = version.into();
         self
     }
 
@@ -103,9 +145,9 @@ impl<'a> PackagerBuilder<'a> {
         self
     }
 
-    /// Set the package description.
-    pub fn description(mut self, description: &'a str) -> Self {
-        self.meta.description = Cow::Borrowed(description);
+    /// Set the package description (`&str` borrows, `String` moves).
+    pub fn description(mut self, description: impl Into<Cow<'a, str>>) -> Self {
+        self.meta.description = description.into();
         self
     }
 
@@ -115,9 +157,9 @@ impl<'a> PackagerBuilder<'a> {
         self
     }
 
-    /// Set the package author.
-    pub fn author(mut self, author: &'a str) -> Self {
-        self.meta.author = Cow::Borrowed(author);
+    /// Set the package author (`&str` borrows, `String` moves).
+    pub fn author(mut self, author: impl Into<Cow<'a, str>>) -> Self {
+        self.meta.author = author.into();
         self
     }
 
@@ -139,36 +181,62 @@ impl<'a> PackagerBuilder<'a> {
         self
     }
 
+    /// Enable or disable zstd compression of the DB file (default: true).
+    pub fn compress(mut self, compress: bool) -> Self {
+        self.compress = compress;
+        self
+    }
+
     /// Build the wheel package.
     pub fn build(&self) -> Result<PackageResult> {
         // Validate the db file exists
         if !self.db_path.exists() {
             return Err(Error::storage(format!(
-                "Database file not found: {}",
+                "Cannot package: database file not found at '{}'. \
+                 Call .persist(path) on Memory first, then .package(). \
+                 The database must exist on disk.",
                 self.db_path.display()
             )));
         }
 
-        let db_bytes = std::fs::read(&*self.db_path)
-            .map_err(|e| Error::storage(format!("Failed to read database: {}", e)))?;
+        let db_bytes = std::fs::read(&*self.db_path).map_err(|e| {
+            Error::storage(format!(
+                "Cannot read database at '{}': {}. \
+                 Check file permissions and ensure the file is not locked by another process.",
+                self.db_path.display(),
+                e
+            ))
+        })?;
 
         let db_size_bytes = db_bytes.len() as u64;
 
-        // Normalize the package name (PEP 503: hyphens → underscores)
-        let normalized_name = self.meta.name.replace('-', "_");
+        // Sanitize and normalize the package name (PEP 503/427)
+        let normalized_name = sanitize_package_name(&self.meta.name)?;
 
         // Generate wheel filename (PEP 427)
         let wheel_name = format!("{}-{}-py3-none-any.whl", normalized_name, self.meta.version);
 
         // Ensure output directory exists
-        std::fs::create_dir_all(&*self.output_dir)
-            .map_err(|e| Error::storage(format!("Failed to create output dir: {}", e)))?;
+        std::fs::create_dir_all(&*self.output_dir).map_err(|e| {
+            Error::storage(format!(
+                "Cannot create output directory '{}': {}. \
+                 Ensure the parent directory exists and is writable.",
+                self.output_dir.display(),
+                e
+            ))
+        })?;
 
         let wheel_path = self.output_dir.join(&wheel_name);
 
         // Build the wheel ZIP
-        let file = std::fs::File::create(&wheel_path)
-            .map_err(|e| Error::storage(format!("Failed to create wheel: {}", e)))?;
+        let file = std::fs::File::create(&wheel_path).map_err(|e| {
+            Error::storage(format!(
+                "Cannot create wheel file '{}': {}. \
+                 Check disk space and write permissions on the output directory.",
+                wheel_path.display(),
+                e
+            ))
+        })?;
 
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default()
@@ -177,8 +245,28 @@ impl<'a> PackagerBuilder<'a> {
         // Track files and their hashes for RECORD
         let mut records: Vec<(String, String, usize)> = Vec::new();
 
+        // Optionally compress the DB with zstd
+        let (db_data, db_filename, compressed, compression_ratio) = if self.compress {
+            let compressed_bytes = zstd::encode_all(&db_bytes[..], 3).map_err(|e| {
+                Error::storage(format!(
+                    "Failed to zstd-compress database: {}. \
+                     Try .compress(false) to package without compression.",
+                    e
+                ))
+            })?;
+            let ratio = compressed_bytes.len() as f64 / db_bytes.len().max(1) as f64;
+            (compressed_bytes, "knowledge.db.zst", true, ratio)
+        } else {
+            let ratio = 1.0;
+            (db_bytes, "knowledge.db", false, ratio)
+        };
+
         // 1. __init__.py
-        let init_py = generate_init_py(&normalized_name);
+        let init_py = if compressed {
+            generate_init_py_compressed(&normalized_name)
+        } else {
+            generate_init_py(&normalized_name)
+        };
         let init_path = format!("{}/{}", normalized_name, "__init__.py");
         write_zip_entry(
             &mut zip,
@@ -188,15 +276,15 @@ impl<'a> PackagerBuilder<'a> {
             &mut records,
         )?;
 
-        // 2. data/knowledge.db
-        let db_path_in_zip = format!("{}/data/knowledge.db", normalized_name);
-        write_zip_entry(&mut zip, &db_path_in_zip, &db_bytes, options, &mut records)?;
+        // 2. data/knowledge.db or data/knowledge.db.zst
+        let db_path_in_zip = format!("{}/data/{}", normalized_name, db_filename);
+        write_zip_entry(&mut zip, &db_path_in_zip, &db_data, options, &mut records)?;
 
         // dist-info directory
         let dist_info = format!("{}-{}.dist-info", normalized_name, self.meta.version);
 
         // 3. METADATA
-        let metadata = generate_metadata(&self.meta, &normalized_name);
+        let metadata = generate_metadata(&self.meta, &normalized_name, compressed);
         let metadata_path = format!("{}/METADATA", dist_info);
         write_zip_entry(
             &mut zip,
@@ -226,15 +314,30 @@ impl<'a> PackagerBuilder<'a> {
         // RECORD itself has no hash
         record_content.push_str(&format!("{},,\n", record_path));
 
-        zip.start_file(&record_path, options)
-            .map_err(|e| Error::storage(format!("Failed to write RECORD: {}", e)))?;
-        zip.write_all(record_content.as_bytes())
-            .map_err(|e| Error::storage(format!("Failed to write RECORD: {}", e)))?;
+        zip.start_file(&record_path, options).map_err(|e| {
+            Error::storage(format!(
+                "Wheel packaging failed during RECORD generation: {}. \
+                 This may indicate a corrupted ZIP — try deleting the output file and retrying.",
+                e
+            ))
+        })?;
+        zip.write_all(record_content.as_bytes()).map_err(|e| {
+            Error::storage(format!(
+                "Wheel packaging failed during RECORD generation: {}. \
+                 This may indicate a corrupted ZIP — try deleting the output file and retrying.",
+                e
+            ))
+        })?;
 
         let file_count = records.len() + 1; // +1 for RECORD itself
 
-        zip.finish()
-            .map_err(|e| Error::storage(format!("Failed to finalize wheel: {}", e)))?;
+        zip.finish().map_err(|e| {
+            Error::storage(format!(
+                "Wheel packaging failed during finalization: {}. \
+                 The output file may be incomplete — delete it and retry.",
+                e
+            ))
+        })?;
 
         let size_bytes = std::fs::metadata(&wheel_path).map(|m| m.len()).unwrap_or(0);
 
@@ -244,6 +347,8 @@ impl<'a> PackagerBuilder<'a> {
             size_bytes,
             db_size_bytes,
             file_count,
+            compressed,
+            compression_ratio,
         })
     }
 }
@@ -305,6 +410,64 @@ fn base64url_nopad(data: &[u8]) -> String {
     result
 }
 
+/// Generate __init__.py with lazy zstd decompression.
+fn generate_init_py_compressed(package_name: &str) -> String {
+    format!(
+        r#""""{package_name} — auto-packaged kkachi knowledge base (zstd-compressed)."""
+
+import os as _os
+from pathlib import Path as _Path
+
+_DATA_DIR = _Path(__file__).parent / "data"
+_COMPRESSED = _DATA_DIR / "knowledge.db.zst"
+_DECOMPRESSED = _DATA_DIR / "knowledge.db"
+
+def _ensure_decompressed():
+    """Decompress the DB on first access (atomic via tmp + rename)."""
+    if _DECOMPRESSED.exists():
+        return
+    import zstandard
+    tmp = _DECOMPRESSED.with_suffix(".db.tmp")
+    with open(_COMPRESSED, "rb") as src:
+        dctx = zstandard.ZstdDecompressor()
+        with open(tmp, "wb") as dst:
+            dctx.copy_stream(src, dst)
+    tmp.rename(_DECOMPRESSED)
+
+def db_path() -> str:
+    """Return the absolute path to the embedded knowledge.db."""
+    _ensure_decompressed()
+    return str(_DECOMPRESSED)
+
+def memory():
+    """Create a kkachi Memory backed by this package's DB.
+
+    Returns:
+        kkachi.Memory: Persistent memory store.
+
+    Raises:
+        ImportError: If kkachi is not installed.
+    """
+    from kkachi import Memory
+    return Memory().persist(db_path())
+
+def search(query: str, k: int = 3):
+    """Search the knowledge base.
+
+    Args:
+        query: Search query.
+        k: Number of results (default 3).
+
+    Returns:
+        list[kkachi.Recall]: Search results.
+    """
+    mem = memory()
+    return mem.search(query, k)
+"#,
+        package_name = package_name
+    )
+}
+
 /// Generate the __init__.py with helper functions.
 fn generate_init_py(package_name: &str) -> String {
     format!(
@@ -349,7 +512,7 @@ def search(query: str, k: int = 3):
 }
 
 /// Generate PEP 566 METADATA.
-fn generate_metadata(meta: &PackageMeta, normalized_name: &str) -> String {
+fn generate_metadata(meta: &PackageMeta, normalized_name: &str, compressed: bool) -> String {
     let mut out = String::new();
     out.push_str("Metadata-Version: 2.1\n");
     out.push_str(&format!("Name: {}\n", normalized_name));
@@ -360,6 +523,9 @@ fn generate_metadata(meta: &PackageMeta, normalized_name: &str) -> String {
     }
     out.push_str("Requires-Python: >=3.8\n");
     out.push_str("License: Proprietary\n");
+    if compressed {
+        out.push_str("Requires-Dist: zstandard>=0.20\n");
+    }
     out
 }
 
@@ -401,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn test_wheel_contents_complete() {
+    fn test_wheel_contents_uncompressed() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         std::fs::write(&db_path, b"fake-db-content").unwrap();
@@ -411,13 +577,14 @@ mod tests {
             .name("test_pkg")
             .version("0.1.0")
             .output_dir(out_dir.to_str().unwrap())
+            .compress(false)
             .build()
             .unwrap();
 
         assert_eq!(result.file_count, 5);
-        assert_eq!(result.wheel_name, "test_pkg-0.1.0-py3-none-any.whl");
+        assert!(!result.compressed);
+        assert!((result.compression_ratio - 1.0).abs() < f64::EPSILON);
 
-        // Verify ZIP contents
         let file = std::fs::File::open(&result.wheel_path).unwrap();
         let mut archive = zip::ZipArchive::new(file).unwrap();
 
@@ -435,6 +602,55 @@ mod tests {
     }
 
     #[test]
+    fn test_wheel_contents_compressed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        // Repetitive content compresses well
+        std::fs::write(&db_path, "hello world ".repeat(1000)).unwrap();
+
+        let out_dir = dir.path().join("dist");
+        let result = PackagerBuilder::new(&db_path)
+            .name("comp_pkg")
+            .version("0.1.0")
+            .output_dir(out_dir.to_str().unwrap())
+            .compress(true)
+            .build()
+            .unwrap();
+
+        assert!(result.compressed);
+        assert!(result.compression_ratio < 1.0);
+
+        let file = std::fs::File::open(&result.wheel_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+
+        // Should have .zst extension
+        assert!(archive.by_name("comp_pkg/data/knowledge.db.zst").is_ok());
+        // Should NOT have uncompressed version
+        assert!(archive.by_name("comp_pkg/data/knowledge.db").is_err());
+
+        // Metadata should require zstandard
+        let mut metadata = String::new();
+        {
+            use std::io::Read;
+            let mut entry = archive
+                .by_name("comp_pkg-0.1.0.dist-info/METADATA")
+                .unwrap();
+            entry.read_to_string(&mut metadata).unwrap();
+        }
+        assert!(metadata.contains("Requires-Dist: zstandard>=0.20"));
+
+        // __init__.py should have decompression logic
+        let mut init = String::new();
+        {
+            use std::io::Read;
+            let mut entry = archive.by_name("comp_pkg/__init__.py").unwrap();
+            entry.read_to_string(&mut init).unwrap();
+        }
+        assert!(init.contains("zstandard"));
+        assert!(init.contains("_ensure_decompressed"));
+    }
+
+    #[test]
     fn test_wheel_record_sha256() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
@@ -445,6 +661,7 @@ mod tests {
             .name("hash_test")
             .version("0.1.0")
             .output_dir(out_dir.to_str().unwrap())
+            .compress(false)
             .build()
             .unwrap();
 
@@ -495,6 +712,7 @@ mod tests {
             .name("integrity_test")
             .version("0.1.0")
             .output_dir(out_dir.to_str().unwrap())
+            .compress(false)
             .build()
             .unwrap();
 
@@ -520,6 +738,7 @@ mod tests {
             .name("sized_pkg")
             .version("0.1.0")
             .output_dir(out_dir.to_str().unwrap())
+            .compress(false)
             .build()
             .unwrap();
 

@@ -186,7 +186,7 @@ impl<'a, L: Llm, M: Metric> Evaluate<'a, L, M> {
             let prediction = match self.llm.generate(&prompt, &context, None).await {
                 Ok(output) => {
                     total_tokens += output.total_tokens() as u64;
-                    output.text
+                    output.text.to_string()
                 }
                 Err(_) => String::new(),
             };

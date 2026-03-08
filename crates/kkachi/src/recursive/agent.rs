@@ -314,7 +314,7 @@ impl<'a, L: Llm> Agent<'a, L> {
                 ParsedResponse::Invalid(reason) => {
                     // LLM gave invalid response, add it as a step with error
                     let step = Step {
-                        thought: output.text.clone(),
+                        thought: output.text.to_string(),
                         action: String::new(),
                         action_input: String::new(),
                         observation: format!("Parse error: {}", reason),

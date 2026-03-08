@@ -39,9 +39,8 @@ pub use crate::recursive::memory::HnswIndex;
 pub use crate::recursive::memory::{OnnxEmbedder, OnnxEmbedderError};
 
 // LLM
-pub use crate::recursive::llm::{
-    BoxedLlm, CliLlm, FailingLlm, IterativeMockLlm, Llm, LmOutput, MockLlm,
-};
+pub use crate::recursive::boxed::BoxedLlm;
+pub use crate::recursive::llm::{CliLlm, FailingLlm, IterativeMockLlm, Llm, LmOutput, MockLlm};
 
 // Results
 pub use crate::recursive::result::{

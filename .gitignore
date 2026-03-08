@@ -81,6 +81,9 @@ ehthumbs.db
 # Examples build artifacts
 /examples/target/
 
+# Hypothesis test cache
+.hypothesis/
+
 # Python (for kkachi-python bindings)
 __pycache__/
 *.py[cod]

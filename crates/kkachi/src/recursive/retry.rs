@@ -257,7 +257,7 @@ mod tests {
 
         let result = llm.generate("test", "", None).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().text, "ok");
+        assert_eq!(&*result.unwrap().text, "ok");
     }
 
     #[tokio::test]
@@ -353,6 +353,6 @@ mod tests {
         let llm = MockLlm::new(|_, _| "ok".to_string()).with_retry(3);
         let result = crate::recursive::shared::block_on(llm.generate("test", "", None));
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().text, "ok");
+        assert_eq!(&*result.unwrap().text, "ok");
     }
 }
